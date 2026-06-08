@@ -173,6 +173,9 @@
     <button class="btn btn-sm btn-success update-pnl-btn" data-id="{{ $record->id }}" data-bs-toggle="tooltip" title="Update PnL to Excel">
         <i class="fas fa-file-excel"></i> Update PnL
     </button>
+    <a href="{{ route('pnl.view-excel', $record->country_code ?? 'SG') }}" class="btn btn-sm btn-info" title="View PnL Excel Sheet" target="_blank">
+    <i class="fas fa-eye"></i> View PnL
+</a>
     {{-- <button class="btn btn-sm btn-info view-items-btn" data-id="{{ $record->id }}" data-bs-toggle="modal" data-bs-target="#itemsModal">
         <i class="fas fa-list"></i>
     </button> --}}

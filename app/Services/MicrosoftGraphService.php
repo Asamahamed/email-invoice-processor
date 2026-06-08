@@ -121,7 +121,36 @@ protected function saveEmail($message)
         $isTourConfirmation = stripos($plainText, 'TOUR CONFIRMATION') !== false;
         
         // Extract Tour Ref - THIS IS THE INVOICE NUMBER
-        $tourRef = $this->extractTourRef($plainText);
+      $tourRef = $this->extractTourReference($plainText);
+
+// NEW code - add these:
+// Extract Invoice Number (VN19610, IS48162 etc.)
+// ========== EXTRACT ALL REFERENCE NUMBERS ==========
+// 1. Extract Invoice Number (VN19610, IS48162, etc.)
+$invoiceNumber = $this->extractInvoiceNumber($plainText);
+
+// 2. Extract Tour Ref (ends with CNTL - like 462414CNTL)
+$tourRef = $this->extractTourReference($plainText);
+
+// 3. Extract Agent Reference No (MMT Booking ID, etc. - like NL2203305926788)
+$agentReferenceNo = $this->extractAgentReferenceNo($plainText);
+
+// 4. If tourRef not found, set to "NA"
+if (!$tourRef) {
+    $tourRef = "NA";
+}
+
+// 5. If no agent reference found, set to "NA" (NOT using tourRef)
+if (!$agentReferenceNo) {
+    $agentReferenceNo = "NA";
+}
+
+// 6. If no invoice number found, set to "NA"
+if (!$invoiceNumber) {
+    $invoiceNumber = "NA";
+}
+
+Log::info("Final Extracted - Invoice: {$invoiceNumber}, Tour Ref: {$tourRef}, Agent Ref: {$agentReferenceNo}");
         
         // Extract File Handler - This should be in TOUR CONFIRMATION section
         $fileHandler = $this->extractField($plainText, 'File Handler');
@@ -136,7 +165,9 @@ protected function saveEmail($message)
         }
         
         // Extract Guest Name
-        $guestName = $this->extractField($plainText, 'Guests Name');
+      // Extract passenger names
+$passengerNames = $this->extractPassengerNames($plainText);
+$guestName = !empty($passengerNames) ? implode(', ', $passengerNames) : $this->extractField($plainText, 'Guests Name');
         
         // ========== IMPROVED TRAVEL DATE EXTRACTION ==========
         $travelStart = null;
@@ -284,6 +315,7 @@ elseif (preg_match('/(\d+)\s*Adults?/i', $plainText, $match)) {
             'agent_name' => $agentName,
             'guest_name' => $guestName,
             'tour_ref' => $tourRef,
+             'invoice_number' => $invoiceNumber,  
             'file_handler' => $fileHandler,
             'travel_start_date' => $travelStart,
             'travel_end_date' => $travelEnd, // Add this if column exists
@@ -292,7 +324,7 @@ elseif (preg_match('/(\d+)\s*Adults?/i', $plainText, $match)) {
             'destination' => $destination,
             'total_amount' => $totalAmount,
             'currency' => $currency,
-            'reference_no' => $tourRef,
+            'reference_no' => $agentReferenceNo,
             'credit_type' => $classification['credit_type'],
             'classification_reason' => $classification['reason'],
             'read_status' => $readStatus,
@@ -539,4 +571,251 @@ protected function extractTourRef($text)
             }
         }
     }
+
+    /**
+ * Extract Invoice Number from email
+ * Looks for patterns like: VN19610, IS48162, SG12345, MY12345, TH12345
+ * Checks fields: IS Number, Confirmation Number, Invoice No.
+ */
+/**
+ * Extract Agent Reference Number (MMT Booking ID, etc.)
+ * Examples: NL2203305926788, ORN123456, etc.
+ * This is different from Tour Ref which ends with CNTL
+ */
+protected function extractAgentReferenceNo($text)
+{
+    $tourSection = '';
+    if (preg_match('/TOUR CONFIRMATION(.*?)(?:With appreciation|From:|$)/is', $text, $sectionMatch)) {
+        $tourSection = $sectionMatch[1];
+    }
+    $searchText = !empty($tourSection) ? $tourSection : $text;
+    
+    // Pattern 1: MMT - Booking ID (NL format)
+    // "MMT - Booking ID: NL2203305926788" or "Booking ID: NL2203305926788"
+    if (preg_match('/Booking\s+ID\s*[:\s]*(NL\d+)/i', $searchText, $match)) {
+        $value = trim($match[1]);
+        Log::info("✓ Extracted Agent Reference (Booking ID): {$value}");
+        return $value;
+    }
+    
+    // Pattern 2: Reference No field (generic)
+    if (preg_match('/Reference\s+No\.?\s*[:\s]*([A-Z0-9]+(?:CNTL)?)/i', $searchText, $match)) {
+        $value = trim($match[1]);
+        // Skip if it ends with CNTL (that's tour ref, not agent ref)
+        if (!preg_match('/CNTL$/i', $value)) {
+            Log::info("✓ Extracted Agent Reference (Reference No): {$value}");
+            return $value;
+        }
+    }
+    
+    // Pattern 3: ORN format (ORN2203305926788)
+    if (preg_match('/\b(ORN\d+)\b/i', $searchText, $match)) {
+        $value = trim($match[1]);
+        Log::info("✓ Extracted Agent Reference (ORN): {$value}");
+        return $value;
+    }
+    
+    // Pattern 4: Look for NL numbers (but not if it's the only thing)
+    if (preg_match('/\b(NL\d{10,})\b/i', $searchText, $match)) {
+        $value = trim($match[1]);
+        Log::info("✓ Extracted Agent Reference (NL format): {$value}");
+        return $value;
+    }
+    
+    Log::info("✗ No Agent Reference Number found");
+    return null;
+}
+
+/**
+ * Extract Tour Reference (ends with CNTL)
+ * Example: 462414CNTL
+ */
+protected function extractTourReference($text)
+{
+    $tourSection = '';
+    if (preg_match('/TOUR CONFIRMATION(.*?)(?:With appreciation|From:|$)/is', $text, $sectionMatch)) {
+        $tourSection = $sectionMatch[1];
+    }
+    $searchText = !empty($tourSection) ? $tourSection : $text;
+    
+    // Pattern 1: Tour Ref field (specifically looking for CNTL ending)
+    if (preg_match('/Tour\s+Ref\s*[:\s]*([A-Z0-9]+CNTL)/i', $searchText, $match)) {
+        $value = trim($match[1]);
+        Log::info("✓ Extracted Tour Ref (CNTL): {$value}");
+        return $value;
+    }
+    
+    // Pattern 2: Tour Ref field without CNTL but likely is CNTL
+    if (preg_match('/Tour\s+Ref\s*[:\s]*([A-Z0-9]{6,})/i', $searchText, $match)) {
+        $value = trim($match[1]);
+        Log::info("✓ Extracted Tour Ref: {$value}");
+        return $value;
+    }
+    
+    // Pattern 3: Look for CNTL pattern anywhere
+    if (preg_match('/\b(\d{6,}CNTL)\b/i', $searchText, $match)) {
+        $value = trim($match[1]);
+        Log::info("✓ Extracted CNTL pattern: {$value}");
+        return $value;
+    }
+    
+    Log::info("✗ No Tour Ref found - will set to NA");
+    return null;  // Return null, let caller handle "NA"
+}
+
+/**
+ * Extract Invoice Number from email
+ * Looks for patterns like: VN19610, IS48162, SG12345, MY12345
+ */
+protected function extractInvoiceNumber($text)
+{
+    // First, get the TOUR CONFIRMATION section
+    $tourSection = '';
+    if (preg_match('/TOUR CONFIRMATION(.*?)(?:With appreciation|From:|$)/is', $text, $sectionMatch)) {
+        $tourSection = $sectionMatch[1];
+    }
+    $searchText = !empty($tourSection) ? $tourSection : $text;
+    
+    // Pattern 1: IS Number field (from 30 Sundays email)
+    if (preg_match('/IS\s+Number\s*[:\s]*([A-Z]{2,3}\d+)/i', $searchText, $match)) {
+        $value = strtoupper(trim($match[1]));
+        Log::info("✓ Extracted Invoice Number from IS Number: {$value}");
+        return $value;
+    }
+    
+    // Pattern 2: Confirmation Number field (from Make My Trip email)
+    if (preg_match('/Confirmation\s+Number\s*[:\s]*([A-Z]{2,3}\d+)/i', $searchText, $match)) {
+        $value = strtoupper(trim($match[1]));
+        Log::info("✓ Extracted Invoice Number from Confirmation Number: {$value}");
+        return $value;
+    }
+    
+    // Pattern 3: Invoice No. field
+    if (preg_match('/Invoice\s+No\.?\s*[:\s]*([A-Z]{2,3}\d+)/i', $searchText, $match)) {
+        $value = strtoupper(trim($match[1]));
+        Log::info("✓ Extracted Invoice Number from Invoice No: {$value}");
+        return $value;
+    }
+    
+    // Pattern 4: Country code patterns
+    $patterns = [
+        '/\b(VN\d{5,})\b/i',
+        '/\b(IS\d{5,})\b/i',
+        '/\b(SG\d{5,})\b/i',
+        '/\b(MY\d{5,})\b/i',
+        '/\b(TH\d{5,})\b/i',
+        '/\b(ID\d{5,})\b/i',
+    ];
+    
+    foreach ($patterns as $pattern) {
+        if (preg_match($pattern, $searchText, $match)) {
+            $value = strtoupper(trim($match[1]));
+            Log::info("✓ Extracted Invoice Number from pattern: {$value}");
+            return $value;
+        }
+    }
+    
+    Log::info("✗ No Invoice Number found");
+    return null;
+}
+/**
+ * Extract passenger/guest names from email
+ */
+/**
+ * Extract passenger/guest names from email
+ * Handles both formats:
+ * 1. "Guests Name & Contact details\nMr. VINAY KUMAR (+91 9079697559)"
+ * 2. "Passenger Details" table with Lead Passenger Name and Name/Type/Age
+ */
+protected function extractPassengerNames($text)
+{
+    $passengers = [];
+    
+    // Try to get TOUR CONFIRMATION section
+    $tourSection = '';
+    if (preg_match('/TOUR CONFIRMATION(.*?)(?:With appreciation|From:|$)/is', $text, $sectionMatch)) {
+        $tourSection = $sectionMatch[1];
+    }
+    $searchText = !empty($tourSection) ? $tourSection : $text;
+    
+    // ========== METHOD 1: Passenger Details section ==========
+    if (preg_match('/Passenger Details(.*?)(?:City|Hotel|Total Tour Cost|$)/is', $searchText, $sectionMatch)) {
+        $passengerSection = $sectionMatch[1];
+        Log::info("Found Passenger Details section");
+        
+        // Pattern for Name, Type, Age (like "Savinay Singh Adult 43")
+        if (preg_match_all('/([A-Za-z\s]+)\s+(Adult|Child)\s+(\d+)/i', $passengerSection, $matches, PREG_SET_ORDER)) {
+            foreach ($matches as $match) {
+                $name = trim(preg_replace('/\s+/', ' ', $match[1]));
+                if (!empty($name) && strlen($name) > 2 && !in_array($name, $passengers)) {
+                    $passengers[] = $name;
+                }
+            }
+        }
+        
+        // Alternative: Lead Passenger Name
+        if (preg_match('/Lead Passenger Name[:\s]*([^\n]+)/i', $passengerSection, $match)) {
+            $leadName = trim($match[1]);
+            if (!empty($leadName) && !in_array($leadName, $passengers)) {
+                array_unshift($passengers, $leadName);
+            }
+        }
+    }
+    
+    // ========== METHOD 2: Guests Name & Contact details format ==========
+    if (empty($passengers)) {
+        // Pattern: "Guests Name & Contact details\nMr. VINAY KUMAR (+91 9079697559)"
+        if (preg_match('/Guests Name\s*&?\s*Contact\s*details\s*[:\s]*([^\n]+)/i', $searchText, $match)) {
+            $guestLine = trim($match[1]);
+            // Extract name before phone number
+            if (preg_match('/([A-Za-z\.\s]+)(?:\+|\(?\d)/', $guestLine, $nameMatch)) {
+                $name = trim($nameMatch[1]);
+                $name = preg_replace('/\s+/', ' ', $name);
+                if (!empty($name) && strlen($name) > 2) {
+                    $passengers[] = $name;
+                }
+            } else {
+                $passengers[] = $guestLine;
+            }
+        }
+        
+        // Simple Guests Name field
+        if (empty($passengers)) {
+            $guestName = $this->extractField($searchText, 'Guests Name');
+            if ($guestName && $guestName != 'NA') {
+                // Clean up - remove phone numbers
+                $guestName = preg_replace('/\s*\(?\+?\d+[\d\s\-]+\)?/', '', $guestName);
+                $guestName = trim($guestName);
+                if (!empty($guestName)) {
+                    $passengers[] = $guestName;
+                }
+            }
+        }
+    }
+    
+    // ========== METHOD 3: Guest Name from any field ==========
+    if (empty($passengers)) {
+        if (preg_match('/Guest\s+Name[:\s]*([^\n]+)/i', $searchText, $match)) {
+            $name = trim($match[1]);
+            if (!empty($name) && $name != 'NA') {
+                $passengers[] = $name;
+            }
+        }
+    }
+    
+    // Clean up and format passenger names
+    $passengers = array_filter(array_unique($passengers));
+    $passengers = array_map(function($name) {
+        // Remove any remaining phone numbers
+        $name = preg_replace('/\s*\(?\+?\d+[\d\s\-\(\)]+\)?/', '', $name);
+        $name = preg_replace('/\s+/', ' ', $name);
+        return trim($name);
+    }, $passengers);
+    
+    $result = !empty($passengers) ? implode(', ', $passengers) : null;
+    Log::info("Extracted Passengers: " . ($result ?: 'None'));
+    
+    return $result ? [$result] : [];
+}
+
 }

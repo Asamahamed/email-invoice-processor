@@ -203,7 +203,7 @@ class PnlController extends Controller
             ->header('Content-Disposition', "attachment; filename=\"$filename\"");
     }
 
-    public function updateExcel(Request $request)
+public function updateExcel(Request $request)
 {
     try {
         $id = $request->input('id');
@@ -213,12 +213,19 @@ class PnlController extends Controller
         $result = $excelService->processAndUpdateExcel($record);
         
         if ($result['success']) {
-            // Mark as processed
-            $record->update(['processed_to_excel' => true]);
+            // Update record status
+            $record->update([
+                'status' => 'approved',
+                'processing_status' => 'completed'
+            ]);
             
             return response()->json([
                 'success' => true,
-                'message' => "PnL updated successfully! {$result['items_count']} items added."
+                'message' => "✅ PnL Updated! {$result['items_count']} items added to Excel.\n\n📊 " . 
+                            "Attractions: " . collect($result['items'])->where('type', 'Attraction')->count() . "\n" .
+                            "Transfers: " . collect($result['items'])->where('type', 'Transfer')->count() . "\n" .
+                            "Hotels: " . collect($result['items'])->where('type', 'Hotel')->count(),
+                'items_count' => $result['items_count']
             ]);
         } else {
             return response()->json([
@@ -229,10 +236,37 @@ class PnlController extends Controller
         
     } catch (\Exception $e) {
         Log::error('Update Excel failed: ' . $e->getMessage());
+        
         return response()->json([
             'success' => false,
             'message' => 'Error: ' . $e->getMessage()
         ], 500);
+    }
+}
+
+/**
+ * View Excel file in browser
+ */
+public function viewExcel($country)
+{
+    try {
+        $excelService = new PnLExcelService();
+        $html = $excelService->getExcelPreview($country);
+        
+        $countryNames = [
+            'SG' => 'Singapore',
+            'MY' => 'Malaysia',
+            'VN' => 'Vietnam',
+            'LK' => 'Sri Lanka'
+        ];
+        
+        $countryName = $countryNames[$country] ?? $country;
+        
+        return view('pnl.excel-preview', compact('html', 'countryName', 'country'));
+        
+    } catch (\Exception $e) {
+        Log::error('View Excel failed: ' . $e->getMessage());
+        return redirect()->back()->with('error', 'Failed to load Excel: ' . $e->getMessage());
     }
 }
 }
