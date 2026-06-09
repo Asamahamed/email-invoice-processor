@@ -19,11 +19,11 @@
         <div class="card-body">
             {!! $html !!}
         </div>
-        <div class="card-footer text-muted">
+        {{-- <div class="card-footer text-muted">
             <i class="fas fa-info-circle"></i> 
             <strong>Note:</strong> Each attraction, transfer, and hotel gets its own row. 
             Amounts are converted from USD to local currency using today's exchange rate (1 USD = 1.35 {{ $country == 'SG' ? 'SGD' : ($country == 'MY' ? 'MYR' : ($country == 'VN' ? 'VND' : 'LKR')) }}).
-        </div>
+        </div> --}}
     </div>
 </div>
 
