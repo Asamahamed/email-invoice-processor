@@ -11,6 +11,8 @@ use PhpOffice\PhpSpreadsheet\Writer\Xlsx;
 use PhpOffice\PhpSpreadsheet\Style\Border;
 use PhpOffice\PhpSpreadsheet\Style\Alignment;
 use PhpOffice\PhpSpreadsheet\Style\Fill;
+use App\Services\GoogleSheetsService;
+
 
 class PnLExcelService
 {
@@ -722,4 +724,197 @@ private function extractHotelsFromTable($text)
             return '<div class="alert alert-danger">Error loading Excel file: ' . $e->getMessage() . '</div>';
         }
     }
+
+    public function processAndUpdateGoogleSheets(PnlRecord $record)
+{
+    try {
+        // Get the email content
+        $content = $record->body_html ?: $record->body;
+        $plainText = strip_tags($content);
+        $plainText = preg_replace('/\r\n/', "\n", $plainText);
+        
+        Log::info("Processing PnL for Google Sheets: " . $record->id);
+
+        // Extract header information
+        $tourNumber = $this->extractTourNumber($plainText);
+        $invoiceNumber = $this->extractInvoiceNumber($plainText);
+        $agentName = $this->extractAgentName($plainText);
+        $totalPax = $this->extractTotalPax($plainText);
+        $totalNights = $this->extractTotalNights($plainText);
+        $totalTourCost = $this->extractTotalTourCost($plainText);
+
+        $countryCode = $this->detectCountry($invoiceNumber, $plainText);
+        $exchangeRate = $this->exchangeRates[$countryCode] ?? 330;
+        $tourRef = $tourNumber ? $tourNumber . 'CNTL' : null;
+        $travelDates = $this->extractTravelDates($plainText, $totalNights);
+
+        // Extract ALL data from different sections
+        $hotels = $this->extractHotelsFromTable($plainText);
+        $transportTotal = $this->getTotalTransportAmount($plainText);
+        $tourTransfersTotal = $this->getTotalTourTransfersAmount($plainText);
+        $attractionTotal = $this->getTotalAttractionAmount($plainText);
+
+        // Build all items for Google Sheets
+        $allItems = [];
+        $sno = 1;
+
+        // 1. INVOICE row
+        if ($totalTourCost > 0) {
+            $allItems[] = [
+                $sno++,
+                $tourRef ?? '-',
+                $invoiceNumber ?? '-',
+                'INVOICE',
+                $travelDates['start'],
+                $travelDates['end'],
+                'Credit',
+                $agentName,
+                '-',
+                $totalTourCost,
+                $exchangeRate,
+                round($totalTourCost * $exchangeRate, 2),
+                "Pax: {$totalPax}, Nights: {$totalNights}"
+            ];
+        }
+
+        // 2. HOTEL rows
+        foreach ($hotels as $hotel) {
+            $allItems[] = [
+                $sno++,
+                $tourRef ?? '-',
+                $invoiceNumber ?? '-',
+                'HOTEL',
+                $travelDates['start'],
+                $travelDates['end'],
+                'Credit',
+                $agentName,
+                $hotel['name'],
+                $hotel['amount'],
+                $exchangeRate,
+                round($hotel['amount'] * $exchangeRate, 2),
+                ($hotel['nights'] ?? 1) . ' nights'
+            ];
+        }
+
+        // 3. TRANSPORT row
+        if ($transportTotal > 0) {
+            $allItems[] = [
+                $sno++,
+                $tourRef ?? '-',
+                $invoiceNumber ?? '-',
+                'TRANSPORT',
+                $travelDates['start'],
+                $travelDates['end'],
+                'Credit',
+                $agentName,
+                '-',
+                $transportTotal,
+                $exchangeRate,
+                round($transportTotal * $exchangeRate, 2),
+                'Total transport expenses'
+            ];
+        }
+
+        // 4. TOUR TRANSFER row
+        if ($tourTransfersTotal > 0) {
+            $allItems[] = [
+                $sno++,
+                $tourRef ?? '-',
+                $invoiceNumber ?? '-',
+                'TOUR TRANSFER',
+                $travelDates['start'],
+                $travelDates['end'],
+                'Credit',
+                $agentName,
+                '-',
+                $tourTransfersTotal,
+                $exchangeRate,
+                round($tourTransfersTotal * $exchangeRate, 2),
+                'Total tour transfer expenses'
+            ];
+        }
+
+        // 5. ATTRACTION row
+        if ($attractionTotal > 0) {
+            $allItems[] = [
+                $sno++,
+                $tourRef ?? '-',
+                $invoiceNumber ?? '-',
+                'ATTRACTION',
+                $travelDates['start'],
+                $travelDates['end'],
+                'Credit',
+                $agentName,
+                '-',
+                $attractionTotal,
+                $exchangeRate,
+                round($attractionTotal * $exchangeRate, 2),
+                'Total attraction & entrance fees'
+            ];
+        }
+
+        if (empty($allItems)) {
+            return [
+                'success' => false,
+                'message' => 'No items found to insert'
+            ];
+        }
+
+        // Update Google Sheets
+        $googleSheets = new GoogleSheetsService();
+        
+        // Headers
+        $headers = array_values($this->excelColumns);
+        
+        // Get sheet name based on country
+        $sheetName = $this->getSheetNameForCountry($countryCode);
+        
+        // Ensure headers exist
+        $googleSheets->ensureHeaders($headers, $sheetName);
+        
+        // Append rows
+        $rowsUpdated = $googleSheets->appendRows($allItems, $sheetName);
+
+        // Update the record
+        $record->update([
+            'tour_ref' => $tourRef,
+            'agent_name' => $agentName,
+            'start_date' => $travelDates['start'],
+            'end_date' => $travelDates['end'],
+            'amount' => $totalTourCost,
+            'exchange_rate_used' => $exchangeRate,
+            'currency' => $this->getCurrencyCode($countryCode),
+            'country_code' => $countryCode,
+            'status' => 'approved',
+            'processing_status' => 'completed'
+        ]);
+
+        return [
+            'success' => true,
+            'items_count' => count($allItems),
+            'hotels_count' => count($hotels),
+            'rows_updated' => $rowsUpdated,
+            'sheet_name' => $sheetName
+        ];
+
+    } catch (\Exception $e) {
+        Log::error('Google Sheets processing failed: ' . $e->getMessage());
+        return ['success' => false, 'message' => 'Error: ' . $e->getMessage()];
+    }
+}
+
+/**
+ * Get sheet name based on country code
+ */
+private function getSheetNameForCountry($countryCode)
+{
+    $sheets = [
+        'LK' => 'Sri Lanka PnL',
+        'VN' => 'Vietnam PnL',
+        'SG' => 'Singapore PnL',
+        'MY' => 'Malaysia PnL',
+    ];
+    
+    return $sheets[$countryCode] ?? 'Master PnL';
+}
 }

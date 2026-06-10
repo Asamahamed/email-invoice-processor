@@ -150,14 +150,30 @@ class InvoiceGenerationService
      * USD: Current date (invoice generation date)
      * INR: 15 days before travel start date
      */
-    protected function getSettlementDate($travelStartDate, $isUSD = true)
-    {
-        if ($isUSD) {
-            return date('d/m/Y');
-        } else {
-            if ($travelStartDate) {
-                try {
+   /**
+ * Get settlement date based on invoice type
+ * USD: Current date (invoice generation date)
+ * INR: 15 days before travel start date
+ */
+protected function getSettlementDate($travelStartDate, $isUSD = true)
+{
+    if ($isUSD) {
+        return date('d/m/Y');
+    } else {
+        if ($travelStartDate) {
+            try {
+                // Try different date formats
+                $travelDate = null;
+                if (strpos($travelStartDate, '-') !== false) {
                     $travelDate = new \DateTime($travelStartDate);
+                } elseif (strpos($travelStartDate, '/') !== false) {
+                    $travelDate = \DateTime::createFromFormat('d/m/Y', $travelStartDate);
+                    if (!$travelDate) {
+                        $travelDate = \DateTime::createFromFormat('m/d/Y', $travelStartDate);
+                    }
+                }
+                
+                if ($travelDate) {
                     $settlementDate = clone $travelDate;
                     $settlementDate->modify('-15 days');
                     
@@ -166,29 +182,50 @@ class InvoiceGenerationService
                         return $today->format('d/m/Y');
                     }
                     return $settlementDate->format('d/m/Y');
-                } catch (\Exception $e) {
-                    return date('d/m/Y');
                 }
+            } catch (\Exception $e) {
+                Log::error("Date parsing error in getSettlementDate: " . $e->getMessage());
             }
-            return date('d/m/Y');
         }
+        return date('d/m/Y');
     }
+}
     
     /**
      * Get formatted travel dates for remark
      */
-    protected function getTravelDates($email)
-    {
-        if ($email->travel_start_date) {
+    /**
+ * Get formatted travel dates for remark
+ */
+protected function getTravelDates($email)
+{
+    $start = null;
+    $end = null;
+    
+    if ($email->travel_start_date) {
+        try {
             $start = date('d/m/Y', strtotime($email->travel_start_date));
-            if ($email->travel_end_date) {
-                $end = date('d/m/Y', strtotime($email->travel_end_date));
-                return "{$start} - {$end}";
-            }
-            return $start;
+        } catch (\Exception $e) {
+            $start = $email->travel_start_date;
         }
-        return '';
     }
+    
+    if ($email->travel_end_date) {
+        try {
+            $end = date('d/m/Y', strtotime($email->travel_end_date));
+        } catch (\Exception $e) {
+            $end = $email->travel_end_date;
+        }
+    }
+    
+    if ($start && $end) {
+        return "{$start} - {$end}";
+    } elseif ($start) {
+        return $start;
+    }
+    
+    return '';
+}
     
     /**
      * CREDIT USD - APPLE HOLIDAYS Format (USD) - NO HANDLING FEE
@@ -270,9 +307,14 @@ protected function generateAppleHolidaysInvoiceHTML($invoice, $email)
                 font-size: 16pt;
                 font-weight: bold;
             }
-            .to-section {
-                margin: 10px 0;
-            }
+           .to-section {
+    margin: 10px 0;
+}
+
+.to-section br {
+    display: block;
+    margin: 2px 0;
+}
             .to-section strong {
                 font-weight: bold;
             }
@@ -849,26 +891,33 @@ protected function generateSharmilaInvoiceHTML($invoice, $email, $calculations)
 }
     
     protected function getAgentAddress($agentName)
-    {
-        $addresses = [
-            'MAKE MY TRIP' => 'MAKE MY TRIP INDIA PVT LTD\n19th floor, Tower A, B & C EpitomeBuilding No. 5\nDLF Cyber City,Phase - III Gurgaon 122 002, India',
-            'TRIP FACTORY' => 'Trip Factory\nYour Address Here',
-            'PICK YOUR TRAIL' => 'Pick Your Trail\nYour Address Here',
-            '30 SUNDAYS' => '30 Sundays\nYour Address Here',
-            'I TRIP' => 'I TRIP\nYour Address Here',
-            'NEXUS DMC' => 'Nexus DMC\nYour Address Here',
-            'RIYA' => 'RIYA HOLIDAYS PVT LTD\nG 2 Leela Business Park, Andheri - Kurla Road,\nAndheri East, Mumbai - 400 059',
-        ];
-        
-        $upperName = strtoupper($agentName);
-        foreach ($addresses as $key => $address) {
-            if (strpos($upperName, $key) !== false) {
-                return $address;
-            }
+{
+    $addresses = [
+        'MAKE MY TRIP' => "MAKE MY TRIP INDIA PVT LTD\n19th floor, Tower A, B & C Epitome Building No. 5\nDLF Cyber City, Phase - III\nGurgaon 122 002, India",
+        'TRIP FACTORY' => "Trip Factory\nYour Address Here\nCity, State - PIN\nCountry",
+        'PICK YOUR TRAIL' => "Pick Your Trail\nYour Address Here\nCity, State - PIN\nCountry",
+        '30 SUNDAYS' => "30 Sundays\nYour Address Here\nCity, State - PIN\nCountry",
+        'I TRIP' => "I TRIP\nYour Address Here\nCity, State - PIN\nCountry",
+        'NEXUS DMC' => "Nexus DMC\nYour Address Here\nCity, State - PIN\nCountry",
+        'RIYA' => "RIYA HOLIDAYS PVT LTD\nG 2 Leela Business Park, Andheri - Kurla Road\nAndheri East, Mumbai - 400 059\nIndia",
+    ];
+    
+    $upperName = strtoupper($agentName);
+    foreach ($addresses as $key => $address) {
+        if (strpos($upperName, $key) !== false) {
+            return $address;
         }
-        
-        return $agentName;
     }
+    
+    // Default - return agent name with line breaks (split by spaces or common patterns)
+    // If no match, try to format the agent name properly
+    if (strlen($agentName) > 30) {
+        // Split long agent names into multiple lines
+        return wordwrap($agentName, 40, "\n", true);
+    }
+    
+    return $agentName;
+}
     /**
  * Get dynamic exchange rate from XE.com
  */
@@ -887,5 +936,114 @@ protected function getExchangeRate()
         // Fallback to default
         return 97;
     }
+}
+/**
+ * Regenerate existing invoice with updated data
+ */
+public function regenerateInvoice($email, $existingInvoice)
+{
+    // Get classification
+    $agentClassifier = new AgentClassificationService();
+    $classification = $agentClassifier->classify(
+        $email->body ?? '', 
+        $email->from_email ?? '', 
+        $email->subject ?? '', 
+        $email->agent_name
+    );
+    
+    // Generate invoice number (keep same if exists)
+    $invoiceNumber = $existingInvoice->invoice_number;
+    
+    // Create directory
+    $directory = storage_path('app/public/invoices');
+    if (!File::exists($directory)) {
+        File::makeDirectory($directory, 0755, true);
+    }
+    
+    // Get dynamic values from email
+    $totalUSD = $email->total_amount ?? 0;
+    $totalGuests = (int)($email->number_of_guests ?? $email->pax_count ?? 1);
+    if ($totalGuests < 1) $totalGuests = 1;
+    
+    $exchangeRate = $email->exchange_rate ?? $this->getExchangeRate();
+    $handlingFeePerPersonUSD = 5;
+    $hasHandlingFee = $classification['has_handling_fee'] ?? false;
+    $invoiceFormat = $classification['invoice_format'] ?? 'apple_holidays';
+    $currency = $classification['currency'] ?? 'USD';
+    
+    if (!$hasHandlingFee) {
+        $handlingFee = 0;
+        $grandTotal = $totalUSD;
+        $currency = 'USD';
+        $calculations = null;
+    } else {
+        $perPersonUSD = $totalUSD / $totalGuests;
+        $netPerPersonUSD = $perPersonUSD - $handlingFeePerPersonUSD;
+        $netPerPersonINR = $netPerPersonUSD * $exchangeRate;
+        $totalTourCostINR = $netPerPersonINR * $totalGuests;
+        $handlingFeePerPersonINR = $handlingFeePerPersonUSD * $exchangeRate;
+        $totalHandlingFeeINR = $handlingFeePerPersonINR * $totalGuests;
+        $subTotalINR = $totalTourCostINR + $totalHandlingFeeINR;
+        
+        $cgstPercent = $email->cgst_percent ?? 9;
+        $sgstPercent = $email->sgst_percent ?? 9;
+        $cgst = $totalHandlingFeeINR * ($cgstPercent / 100);
+        $sgst = $totalHandlingFeeINR * ($sgstPercent / 100);
+        $finalGrandTotal = $subTotalINR + $cgst + $sgst;
+        
+        $handlingFee = $totalHandlingFeeINR;
+        $grandTotal = $finalGrandTotal;
+        $currency = 'INR';
+        
+        $calculations = [
+            'original_usd' => $totalUSD,
+            'total_guests' => $totalGuests,
+            'per_person_usd' => $perPersonUSD,
+            'handling_fee_per_person_usd' => $handlingFeePerPersonUSD,
+            'net_per_person_usd' => $netPerPersonUSD,
+            'exchange_rate' => $exchangeRate,
+            'net_per_person_inr' => $netPerPersonINR,
+            'handling_fee_per_person_inr' => $handlingFeePerPersonINR,
+            'total_tour_cost_inr' => $totalTourCostINR,
+            'total_handling_fee_inr' => $totalHandlingFeeINR,
+            'sub_total_inr' => $subTotalINR,
+            'cgst_percent' => $cgstPercent,
+            'cgst_amount' => $cgst,
+            'sgst_percent' => $sgstPercent,
+            'sgst_amount' => $sgst,
+            'final_total_inr' => $finalGrandTotal
+        ];
+    }
+    
+    // Update existing invoice record
+    $existingInvoice->update([
+        'customer_name' => $email->agent_name ?? ($email->guest_name ?? 'Unknown Customer'),
+        'guest_name' => $email->guest_name,
+        'tour_ref' => $email->tour_ref,
+        'total_amount' => $totalUSD,
+        'handling_fee' => $handlingFee,
+        'grand_total' => $grandTotal,
+        'currency' => $currency,
+        'invoice_type' => $classification['credit_type'],
+        'status' => 'draft',
+        'calculations' => $calculations ? json_encode($calculations) : null,
+        'updated_at' => now(),
+    ]);
+    
+    // Generate PDF based on invoice format
+    if ($invoiceFormat == 'apple_holidays') {
+        $html = $this->generateAppleHolidaysInvoiceHTML($existingInvoice, $email);
+    } else {
+        $html = $this->generateSharmilaInvoiceHTML($existingInvoice, $email, $calculations);
+    }
+    
+    $pdf = Pdf::loadHTML($html);
+    $filename = "invoices/{$existingInvoice->invoice_number}.pdf";
+    $pdf->save(storage_path("app/public/{$filename}"));
+    
+    $existingInvoice->file_path = $filename;
+    $existingInvoice->save();
+    
+    return $existingInvoice;
 }
 }

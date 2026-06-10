@@ -32,7 +32,7 @@
                     </div>
                     <div class="col-md-3 col-sm-6 mb-3">
                         <div class="stat-card">
-                            <div class="stat-title">Total Amount (SGD)</div>
+                            <div class="stat-title">Total Amount </div>
                             <h3 class="stat-value">$ {{ number_format($stats['total_amount'] ?? 0, 2) }}</h3>
                         </div>
                     </div>
@@ -155,15 +155,10 @@
                                             <span class="badge bg-secondary">{{ $record->category ?: 'Other' }}</span>
                                         @endif
                                     </td>
-                                    <td class="fw-bold">
-                                        @php
-                                            $displayAmount =
-                                                $record->currency == 'SGD'
-                                                    ? $record->amount
-                                                    : $record->amount * ($record->exchange_rate_used ?? 1);
-                                        @endphp
-                                        {{ number_format($displayAmount, 2) }}
-                                    </td>
+                                   <td class="fw-bold">
+    {{ number_format($record->amount, 2) }}
+</td>
+<td>USD</td>
                                     <td>{{ $record->currency ?: 'SGD' }}</td>
                                     <td>
                                         @if ($record->read_status == 'unread')
@@ -218,7 +213,88 @@
                     </table>
                 </div>
 
-                {{ $pnlRecords->links() }}
+              <!-- Pagination -->
+<div class="d-flex justify-content-between align-items-center mt-4 flex-wrap gap-3">
+    <div class="text-muted small">
+        Showing {{ $pnlRecords->firstItem() ?? 0 }} to {{ $pnlRecords->lastItem() ?? 0 }} of {{ $pnlRecords->total() ?? 0 }} entries
+    </div>
+    <div class="pagination-wrapper">
+        @if ($pnlRecords->hasPages())
+            <nav aria-label="Page navigation">
+                <ul class="pagination mb-0">
+                    {{-- Previous Page Link --}}
+                    @if ($pnlRecords->onFirstPage())
+                        <li class="page-item disabled">
+                            <span class="page-link">
+                                <i class="fas fa-chevron-left"></i> Previous
+                            </span>
+                        </li>
+                    @else
+                        <li class="page-item">
+                            <a class="page-link" href="{{ $pnlRecords->previousPageUrl() }}" rel="prev">
+                                <i class="fas fa-chevron-left"></i> Previous
+                            </a>
+                        </li>
+                    @endif
+
+                    {{-- Pagination Elements --}}
+                    @php
+                        $start = max(1, $pnlRecords->currentPage() - 2);
+                        $end = min($start + 4, $pnlRecords->lastPage());
+                        if ($end - $start < 4 && $start > 1) {
+                            $start = max(1, $end - 4);
+                        }
+                    @endphp
+
+                    @if ($start > 1)
+                        <li class="page-item">
+                            <a class="page-link" href="{{ $pnlRecords->url(1) }}">1</a>
+                        </li>
+                        @if ($start > 2)
+                            <li class="page-item disabled"><span class="page-link">...</span></li>
+                        @endif
+                    @endif
+
+                    @for ($page = $start; $page <= $end; $page++)
+                        @if ($page == $pnlRecords->currentPage())
+                            <li class="page-item active" aria-current="page">
+                                <span class="page-link">{{ $page }}</span>
+                            </li>
+                        @else
+                            <li class="page-item">
+                                <a class="page-link" href="{{ $pnlRecords->url($page) }}">{{ $page }}</a>
+                            </li>
+                        @endif
+                    @endfor
+
+                    @if ($end < $pnlRecords->lastPage())
+                        @if ($end < $pnlRecords->lastPage() - 1)
+                            <li class="page-item disabled"><span class="page-link">...</span></li>
+                        @endif
+                        <li class="page-item">
+                            <a class="page-link" href="{{ $pnlRecords->url($pnlRecords->lastPage()) }}">{{ $pnlRecords->lastPage() }}</a>
+                        </li>
+                    @endif
+
+                    {{-- Next Page Link --}}
+                    @if ($pnlRecords->hasMorePages())
+                        <li class="page-item">
+                            <a class="page-link" href="{{ $pnlRecords->nextPageUrl() }}" rel="next">
+                                Next <i class="fas fa-chevron-right"></i>
+                            </a>
+                        </li>
+                    @else
+                        <li class="page-item disabled">
+                            <span class="page-link">
+                                Next <i class="fas fa-chevron-right"></i>
+                            </span>
+                        </li>
+                    @endif
+                </ul>
+            </nav>
+        @endif
+    </div>
+</div>
             </div>
         </div>
     </div>
@@ -294,6 +370,88 @@
             position: relative;
             z-index: 10;
         }
+        /* Pagination Styles */
+.pagination-wrapper {
+    margin-top: 0;
+}
+
+.pagination {
+    display: flex;
+    padding-left: 0;
+    list-style: none;
+    border-radius: 0.375rem;
+    gap: 5px;
+    flex-wrap: wrap;
+    margin-bottom: 0;
+}
+
+.pagination .page-item {
+    margin: 0;
+}
+
+.pagination .page-item .page-link {
+    position: relative;
+    display: block;
+    padding: 0.5rem 0.85rem;
+    font-size: 0.875rem;
+    line-height: 1.25;
+    color: #0d6efd;
+    background-color: #fff;
+    border: 1px solid #dee2e6;
+    border-radius: 0.375rem;
+    text-decoration: none;
+    transition: all 0.2s ease;
+}
+
+.pagination .page-item .page-link:hover {
+    z-index: 2;
+    color: #0a58ca;
+    background-color: #e9ecef;
+    border-color: #dee2e6;
+}
+
+.pagination .page-item.active .page-link {
+    z-index: 3;
+    color: #fff;
+    background-color: #0d6efd;
+    border-color: #0d6efd;
+}
+
+.pagination .page-item.disabled .page-link {
+    color: #6c757d;
+    pointer-events: none;
+    cursor: auto;
+    background-color: #fff;
+    border-color: #dee2e6;
+}
+
+.pagination .page-item:first-child .page-link {
+    border-top-left-radius: 0.375rem;
+    border-bottom-left-radius: 0.375rem;
+}
+
+.pagination .page-item:last-child .page-link {
+    border-top-right-radius: 0.375rem;
+    border-bottom-right-radius: 0.375rem;
+}
+
+/* Previous/Next buttons icons */
+.pagination .page-link i {
+    font-size: 0.75rem;
+}
+
+/* Responsive pagination */
+@media (max-width: 768px) {
+    .pagination .page-item .page-link {
+        padding: 0.375rem 0.6rem;
+        font-size: 0.75rem;
+    }
+    
+    .pagination .page-link .fa-chevron-left,
+    .pagination .page-link .fa-chevron-right {
+        display: none;
+    }
+}
     </style>
 
     @push('scripts')

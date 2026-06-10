@@ -1,5 +1,4 @@
 <?php
-// app/Http/Controllers/InvoiceController.php
 
 namespace App\Http\Controllers;
 
@@ -8,14 +7,15 @@ use App\Models\GeneratedInvoice;
 use App\Services\EmailFetchService;
 use App\Services\InvoiceGenerationService;
 use Illuminate\Http\Request;
+use Illuminate\Validation\ValidationException;
 
 class InvoiceController extends Controller
 {
     public function index(Request $request)
     {
-        $query = IncomingEmail::query();
+        $query = IncomingEmail::with('invoice')->latest('received_at');
         
-        // Search functionality
+        // Apply filters
         if ($request->filled('search')) {
             $search = $request->search;
             $query->where(function($q) use ($search) {
@@ -29,17 +29,14 @@ class InvoiceController extends Controller
             });
         }
         
-        // Filter by credit type
         if ($request->filled('credit_type') && $request->credit_type != 'all') {
             $query->where('credit_type', $request->credit_type);
         }
         
-        // Filter by read status
         if ($request->filled('read_status') && $request->read_status != 'all') {
             $query->where('read_status', $request->read_status);
         }
         
-        // Filter by date range
         if ($request->filled('date_from')) {
             $query->whereDate('received_at', '>=', $request->date_from);
         }
@@ -47,28 +44,9 @@ class InvoiceController extends Controller
             $query->whereDate('received_at', '<=', $request->date_to);
         }
         
-        // Sort
-        $sortField = $request->get('sort', 'received_at');
-        $sortDirection = $request->get('direction', 'desc');
-        
-        // Validate sort field to prevent SQL injection
-        $allowedSortFields = ['id', 'received_at', 'total_amount', 'agent_name'];
-        if (!in_array($sortField, $allowedSortFields)) {
-            $sortField = 'received_at';
-        }
-        
-        $query->orderBy($sortField, $sortDirection);
-        
-        // Pagination
         $perPage = $request->get('per_page', 20);
-        $allowedPerPage = [10, 20, 50, 100];
-        if (!in_array($perPage, $allowedPerPage)) {
-            $perPage = 20;
-        }
-        
         $emails = $query->paginate($perPage)->withQueryString();
         
-        // Get statistics
         $stats = [
             'total' => IncomingEmail::count(),
             'credit' => IncomingEmail::where('credit_type', 'credit')->count(),
@@ -79,10 +57,9 @@ class InvoiceController extends Controller
         return view('invoices.index', compact('emails', 'stats'));
     }
     
-    // NON-CREDIT: Show emails with search/filter
     public function nonCredit(Request $request)
     {
-        $query = IncomingEmail::where('credit_type', 'non_credit');
+        $query = IncomingEmail::with('invoice')->where('credit_type', 'non_credit')->latest('received_at');
         
         if ($request->filled('search')) {
             $search = $request->search;
@@ -101,10 +78,10 @@ class InvoiceController extends Controller
             $query->whereDate('received_at', '<=', $request->date_to);
         }
         
-        $emails = $query->orderBy('received_at', 'desc')->paginate(20)->withQueryString();
+        $emails = $query->paginate(20)->withQueryString();
         
         $stats = [
-            'total' => $query->count(),
+            'total' => IncomingEmail::where('credit_type', 'non_credit')->count(),
             'credit' => IncomingEmail::where('credit_type', 'credit')->count(),
             'non_credit' => IncomingEmail::where('credit_type', 'non_credit')->count(),
             'invoices' => GeneratedInvoice::count(),
@@ -113,10 +90,9 @@ class InvoiceController extends Controller
         return view('invoices.non-credit', compact('emails', 'stats'));
     }
     
-    // CREDIT: Show generated invoices with search/filter
     public function credit(Request $request)
     {
-        $query = GeneratedInvoice::with('email');
+        $query = GeneratedInvoice::with('email')->latest();
         
         if ($request->filled('search')) {
             $search = $request->search;
@@ -134,18 +110,7 @@ class InvoiceController extends Controller
             $query->whereDate('invoice_date', '<=', $request->date_to);
         }
         
-        $sortField = $request->get('sort', 'created_at');
-        $sortDirection = $request->get('direction', 'desc');
-        
-        $allowedSortFields = ['id', 'invoice_number', 'invoice_date', 'grand_total', 'created_at'];
-        if (!in_array($sortField, $allowedSortFields)) {
-            $sortField = 'created_at';
-        }
-        
-        $query->orderBy($sortField, $sortDirection);
-        
-        $perPage = $request->get('per_page', 20);
-        $invoices = $query->paginate($perPage)->withQueryString();
+        $invoices = $query->paginate(20)->withQueryString();
         
         $stats = [
             'total' => GeneratedInvoice::count(),
@@ -161,114 +126,165 @@ class InvoiceController extends Controller
         try {
             $service = new EmailFetchService();
             $count = $service->fetchAllEmails();
-            
-            if ($count > 0) {
-                return redirect()->back()->with('success', "✅ Successfully fetched and saved {$count} new email(s)!");
-            } else {
-                return redirect()->back()->with('info', '📭 No new emails found in the mailbox.');
-            }
-            
+            $message = $count > 0 
+                ? "✅ Successfully fetched and saved {$count} new email(s)!"
+                : '📭 No new emails found in the mailbox.';
+            return redirect()->back()->with('success', $message);
         } catch (\Exception $e) {
             \Log::error('Email processing failed: ' . $e->getMessage());
             return redirect()->back()->with('error', '❌ Failed to fetch emails: ' . $e->getMessage());
         }
     }
     
-    public function downloadInvoice($id)
+    public function viewInvoice($id)
     {
         $invoice = GeneratedInvoice::findOrFail($id);
+        $path = storage_path("app/public/{$invoice->file_path}");
         
-        $paths = [
-            storage_path("app/public/{$invoice->file_path}"),
-            storage_path("app/{$invoice->file_path}"),
-            storage_path("app/public/invoices/{$invoice->invoice_number}.pdf")
-        ];
-        
-        foreach ($paths as $path) {
-            if (file_exists($path)) {
-                return response()->download($path, "{$invoice->invoice_number}.pdf");
-            }
+        if (file_exists($path)) {
+            return response()->file($path, [
+                'Content-Type' => 'application/pdf',
+                'Content-Disposition' => 'inline; filename="' . $invoice->invoice_number . '.pdf"'
+            ]);
         }
         
         return redirect()->back()->with('error', 'Invoice file not found');
     }
     
-    public function generateInvoice(Request $request)
+    public function downloadInvoice($id)
     {
-        $request->validate([
-            'email_id' => 'required|exists:incoming_emails,id'
-        ]);
+        $invoice = GeneratedInvoice::findOrFail($id);
+        $path = storage_path("app/public/{$invoice->file_path}");
         
+        if (file_exists($path)) {
+            return response()->download($path, "{$invoice->invoice_number}.pdf");
+        }
+        
+        return redirect()->back()->with('error', 'Invoice file not found');
+    }
+    
+    public function generateAndViewInvoice(Request $request)
+    {
+        $request->validate(['email_id' => 'required|exists:incoming_emails,id']);
         $email = IncomingEmail::findOrFail($request->email_id);
         
         try {
+            // CRITICAL FIX: Check both email_id AND invoice_number for duplicates
+            $existingByEmail = GeneratedInvoice::where('email_id', $email->id)->first();
+            if ($existingByEmail) {
+                return response()->json([
+                    'success' => false,
+                    'message' => '❌ Invoice already exists for this email! Please use "Regenerate" to update.'
+                ], 409);
+            }
+            
+            // Also check if invoice number already exists (duplicate email case)
+            if ($email->invoice_number && $email->invoice_number != 'NA') {
+                $existingByNumber = GeneratedInvoice::where('invoice_number', $email->invoice_number)->first();
+                if ($existingByNumber) {
+                    return response()->json([
+                        'success' => false,
+                        'message' => ' Invoice number ' . $email->invoice_number . ' already exists! This email may be a duplicate. Please check manually.'
+                    ], 409);
+                }
+            }
+            
             $invoiceService = new InvoiceGenerationService();
             $invoice = $invoiceService->generateFromEmail($email);
+            $email->update(['processing_status' => 'invoice_generated']);
             
-            $email->processing_status = 'invoice_generated';
-            $email->save();
-            
-            return redirect()->back()->with('success', "✅ Invoice {$invoice->invoice_number} generated successfully!");
+            return response()->json([
+                'success' => true,
+                'invoice_id' => $invoice->id,
+                'message' => '✅ Invoice generated successfully!'
+            ]);
             
         } catch (\Exception $e) {
             \Log::error('Invoice generation failed: ' . $e->getMessage());
-            return redirect()->back()->with('error', '❌ Failed to generate invoice: ' . $e->getMessage());
-        }
-    }
-    
-    public function bulkGenerate(Request $request)
-    {
-        $request->validate([
-            'email_ids' => 'required|array',
-            'email_ids.*' => 'exists:incoming_emails,id'
-        ]);
-        
-        $generated = 0;
-        $failed = 0;
-        
-        foreach ($request->email_ids as $emailId) {
-            $email = IncomingEmail::find($emailId);
-            if ($email && $email->credit_type == 'non_credit') {
-                try {
-                    $invoiceService = new InvoiceGenerationService();
-                    $invoice = $invoiceService->generateFromEmail($email);
-                    $email->processing_status = 'invoice_generated';
-                    $email->save();
-                    $generated++;
-                } catch (\Exception $e) {
-                    $failed++;
-                }
-            } else {
-                $failed++;
+            
+            // Check for duplicate entry error
+            if (str_contains($e->getMessage(), 'Duplicate entry') || str_contains($e->getMessage(), '1062')) {
+                return response()->json([
+                    'success' => false,
+                    'message' => '❌ Duplicate invoice! This email may have already been processed or invoice number already exists.'
+                ], 409);
             }
+            
+            return response()->json([
+                'success' => false,
+                'message' => '❌ Failed to generate invoice: ' . $e->getMessage()
+            ], 500);
+        }
+    }
+    
+    public function regenerateInvoice(Request $request)
+    {
+        $request->validate(['email_id' => 'required|exists:incoming_emails,id']);
+        $email = IncomingEmail::findOrFail($request->email_id);
+        
+        try {
+            $existingInvoice = GeneratedInvoice::where('email_id', $email->id)->first();
+            
+            if (!$existingInvoice) {
+                return response()->json([
+                    'success' => false,
+                    'message' => '❌ No invoice found to regenerate. Please click "Generate" first.'
+                ], 404);
+            }
+            
+            // Delete old PDF
+            $oldPath = storage_path("app/public/{$existingInvoice->file_path}");
+            if (file_exists($oldPath)) {
+                unlink($oldPath);
+            }
+            
+            // Regenerate
+            $invoiceService = new InvoiceGenerationService();
+            $invoice = $invoiceService->regenerateInvoice($email, $existingInvoice);
+            $email->update(['processing_status' => 'invoice_generated']);
+            
+            return response()->json([
+                'success' => true,
+                'invoice_id' => $invoice->id,
+                'message' => '✅ Invoice regenerated successfully!'
+            ]);
+            
+        } catch (\Exception $e) {
+            \Log::error('Invoice regeneration failed: ' . $e->getMessage());
+            
+            if (str_contains($e->getMessage(), 'Duplicate entry') || str_contains($e->getMessage(), '1062')) {
+                return response()->json([
+                    'success' => false,
+                    'message' => '❌ Cannot regenerate: Invoice number conflict.'
+                ], 409);
+            }
+            
+            return response()->json([
+                'success' => false,
+                'message' => '❌ Failed to regenerate invoice: ' . $e->getMessage()
+            ], 500);
+        }
+    }
+    
+    public function viewEmail(Request $request)
+    {
+        $email = IncomingEmail::find($request->id);
+        if (!$email) {
+            return response()->json(['success' => false, 'message' => 'Email not found']);
         }
         
-        return redirect()->back()->with('success', "✅ Generated {$generated} invoices. Failed: {$failed}");
+        return response()->json([
+            'success' => true,
+            'email' => [
+                'id' => $email->id,
+                'from_name' => $email->from_name,
+                'from_email' => $email->from_email,
+                'subject' => $email->subject,
+                'body' => $email->body,
+                'received_at' => $email->received_at->format('d/m/Y H:i:s'),
+                'agent_name' => $email->agent_name,
+                'tour_ref' => $email->tour_ref,
+            ]
+        ]);
     }
-
-    /**
- * View full email content
- */
-public function viewEmail(Request $request)
-{
-    $email = IncomingEmail::find($request->id);
-    
-    if (!$email) {
-        return response()->json(['success' => false, 'message' => 'Email not found']);
-    }
-    
-    return response()->json([
-        'success' => true,
-        'email' => [
-            'id' => $email->id,
-            'from_name' => $email->from_name,
-            'from_email' => $email->from_email,
-            'subject' => $email->subject,
-            'body' => $email->body,
-            'received_at' => $email->received_at->format('d/m/Y H:i:s'),
-            'agent_name' => $email->agent_name,
-            'tour_ref' => $email->tour_ref,
-        ]
-    ]);
-}
 }
