@@ -21,7 +21,13 @@ class InvoiceGenerationService
         }
         
         // Generate invoice number
-       $invoiceNumber = $email->invoice_number;
+        $invoiceNumber = $email->invoice_number;
+        if (!$invoiceNumber || $invoiceNumber === 'NA') {
+            $lastInvoice = GeneratedInvoice::orderBy('id', 'desc')->first();
+            $lastNumber = $lastInvoice ? intval(substr($lastInvoice->invoice_number, 2)) : 48150;
+            $newNumber = str_pad($lastNumber + 1, 5, '0', STR_PAD_LEFT);
+            $invoiceNumber = 'IS' . $newNumber;
+        }
         
         // Create directory
         $directory = storage_path('app/public/invoices');
