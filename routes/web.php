@@ -41,3 +41,4 @@ Route::get('/pnl/view-email/{id}', [PnlController::class, 'viewEmail'])->name('p
 Route::get('/pnl/items/{id}', [PnlController::class, 'viewItems'])->name('pnl.items');
 Route::get('/pnl/export', [PnlController::class, 'exportToExcel'])->name('pnl.export');
 Route::post('/pnl/update-excel', [PnlController::class, 'updateExcel'])->name('pnl.update-excel');
+Route::get('/pnl/view-excel/{country}', [PnlController::class, 'viewExcel'])->name('pnl.view-excel');

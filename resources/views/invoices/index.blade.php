@@ -163,6 +163,7 @@
                             <th>Travel Dates</th>
                             <th>Handler</th>
                             <th>Agent</th>
+                            <th>Invoice No</th>
                             <th>Tour Ref</th>
                             <th>Amount</th>
                             <th>Type</th>
@@ -199,7 +200,20 @@
                             </td>
                             <td>{{ $email->file_handler ?: '-' }}</td>
                             <td class="fw-semibold">{{ $email->agent_name ?: '-' }}</td>
-                            <td><code>{{ $email->tour_ref ?: '-' }}</code></td>
+                          <td>
+    @if($email->invoice_number && $email->invoice_number != 'NA')
+        <code class="fw-bold text-primary">{{ $email->invoice_number }}</code>
+    @else
+        <span class="text-muted">-</span>
+    @endif
+</td>
+<td>
+    @if($email->tour_ref && $email->tour_ref != 'NA')
+        <code>{{ $email->tour_ref }}</code>
+    @else
+        <span class="text-muted">-</span>
+    @endif
+</td>
                             <td class="fw-semibold">
                                 @if($email->total_amount)
                                     {{ $email->currency ?? 'USD' }} {{ number_format($email->total_amount, 2) }}
@@ -368,7 +382,8 @@ $(document).ready(function() {
                 <p><strong>Received:</strong> ${response.email.received_at}</p>
                 <p><strong>Subject:</strong> ${escapeHtml(response.email.subject)}</p>
                 ${response.email.agent_name ? `<p><strong>Agent:</strong> ${escapeHtml(response.email.agent_name)}</p>` : ''}
-                ${response.email.tour_ref ? `<p><strong>Tour Ref:</strong> ${escapeHtml(response.email.tour_ref)}</p>` : ''}
+               ${response.email.invoice_number ? `<p><strong>Invoice No:</strong> ${escapeHtml(response.email.invoice_number)}</p>` : ''}
+${response.email.tour_ref ? `<p><strong>Tour Ref:</strong> ${escapeHtml(response.email.tour_ref)}</p>` : ''}
             </div>
             <div class="email-content">
                 ${emailContent}

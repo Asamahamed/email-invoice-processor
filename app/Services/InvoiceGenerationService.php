@@ -21,10 +21,7 @@ class InvoiceGenerationService
         }
         
         // Generate invoice number
-        $lastInvoice = GeneratedInvoice::orderBy('id', 'desc')->first();
-        $lastNumber = $lastInvoice ? intval(substr($lastInvoice->invoice_number, 2)) : 48150;
-        $newNumber = str_pad($lastNumber + 1, 5, '0', STR_PAD_LEFT);
-        $invoiceNumber = 'IS' . $newNumber;
+       $invoiceNumber = $email->invoice_number;
         
         // Create directory
         $directory = storage_path('app/public/invoices');
@@ -406,7 +403,7 @@ protected function generateAppleHolidaysInvoiceHTML($invoice, $email)
                     <td class="label">Ref ID:</td>
                     <td>' . htmlspecialchars($email->tour_ref ?? '-') . '</td>
                     <td class="label">Agent ID:</td>
-                    <td>' . htmlspecialchars($email->tour_ref ?? '-') . '</td>
+                    <td>' . htmlspecialchars($email->reference_no ?? '-') . '</td>
                 </tr>
                 <tr>
                     <td class="label">File Handler:</td>
@@ -480,7 +477,9 @@ protected function generateAppleHolidaysInvoiceHTML($invoice, $email)
         </tr>
     </table>
 </div>
-            
+             <div class="remark">
+                <strong>Travel Date:</strong> ' . ($travelDates ?: 'No travel dates specified') . '
+            </div>
             <!-- Settlement Text -->
             <div class="settlement-text">
                 Please settle the invoice on or before ' . $settlementDate . '
@@ -499,13 +498,11 @@ protected function generateAppleHolidaysInvoiceHTML($invoice, $email)
             
             <!-- Printed By -->
             <div class="staff">
-                Printed by: ' . strtoupper($staffName) . '
+            Auto Generated  <br>
             </div>
             
             <!-- Travel Dates Remark -->
-            <div class="remark">
-                <strong>Travel Date:</strong> ' . ($travelDates ?: 'No travel dates specified') . '
-            </div>
+           
             
             <!-- Footer -->
             <div class="footer">
@@ -753,7 +750,7 @@ protected function generateSharmilaInvoiceHTML($invoice, $email, $calculations)
                     <td class="info-label">Date:</td>
                     <td>' . date('d/m/Y', strtotime($invoice->invoice_date)) . '</td>
                     <td class="info-label">Agent ID:</td>
-                    <td>' . htmlspecialchars($email->tour_ref ?? '-') . '</td>
+                    <td>' . htmlspecialchars($email->reference_no ?? '-') . '</td>
                  </tr>
                 <tr>
                     <td class="info-label">GST NO.:</td>
@@ -807,7 +804,9 @@ protected function generateSharmilaInvoiceHTML($invoice, $email, $calculations)
                     </tr>
                 </table>
             </div>
-            
+              <div class="remark">
+                <strong>Travel Date:</strong> ' . ($travelDates ?: 'No travel dates specified') . '
+            </div>
             <!-- Settlement Text -->
             <div class="settlement-text">
                 Please settle the invoice on or before ' . $settlementDate . '
@@ -826,19 +825,17 @@ protected function generateSharmilaInvoiceHTML($invoice, $email, $calculations)
             
             <!-- Printed By and Exchange Rate -->
 <div class="printed-by">
-    Printed by: ' . strtoupper($staffName) . '<br>
+   Auto Generated <br>
     Xe: ' . number_format($exchangeRate - 1, 2) . ' (+1) = ' . $exchangeRate . '
 </div>
             
             <!-- Travel Dates Remark -->
-            <div class="remark">
-                <strong>Travel Date:</strong> ' . ($travelDates ?: 'No travel dates specified') . '
-            </div>
+          
             
             <!-- Important Notes -->
             <div class="warning-text">
                 <strong>Important Notes:</strong><br>
-                • <strong>Cash Deposit Instructions:</strong> Please do not deposit the full amount in a single transaction into our account. Instead, kindly make part payments at regular intervals to avoid attracting Tax Collected at Source (TCS), which is applicable on cash deposits exceeding ₹499,000.<br>
+                • <strong>Cash Deposit Instructions:</strong> Please do not deposit the full amount in a single transaction into our account. Instead, kindly make part payments at regular intervals to avoid attracting Tax Collected at Source (TCS), which is applicable on cash deposits exceeding ₹49,000.<br>
                 • <strong>QR Code Payment Delivery:</strong> While making payments via QR code, please avoid using credit cards. If a credit card is used, Transaction Disbursement Rate (TDR) charges will be applicable.
             </div>
             
