@@ -400,7 +400,11 @@ ${response.email.tour_ref ? `<p><strong>Tour Ref:</strong> ${escapeHtml(response
     // Generate invoice from modal
     $('#modalGenerateBtn').click(function() {
         if (currentEmailId) {
-            window.location.href = '{{ route("generate.invoice") }}?email_id=' + currentEmailId;
+            let form = $('<form action="{{ route("generate.invoice") }}" method="POST"></form>');
+            form.append('<input type="hidden" name="_token" value="{{ csrf_token() }}">');
+            form.append('<input type="hidden" name="email_id" value="' + currentEmailId + '">');
+            $('body').append(form);
+            form.submit();
         }
     });
     
