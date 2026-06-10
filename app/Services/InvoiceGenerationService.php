@@ -21,7 +21,7 @@ class InvoiceGenerationService
         }
         
         // Generate invoice number
-        $invoiceNumber = $email->invoice_number;
+       $invoiceNumber = $email->invoice_number;
         if (!$invoiceNumber || $invoiceNumber === 'NA') {
             $lastInvoice = GeneratedInvoice::orderBy('id', 'desc')->first();
             $lastNumber = $lastInvoice ? intval(substr($lastInvoice->invoice_number, 2)) : 48150;

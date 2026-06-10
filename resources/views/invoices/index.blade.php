@@ -201,7 +201,9 @@
                             <td>{{ $email->file_handler ?: '-' }}</td>
                             <td class="fw-semibold">{{ $email->agent_name ?: '-' }}</td>
                           <td>
-    @if($email->invoice_number && $email->invoice_number != 'NA')
+    @if($email->invoice)
+        <code class="fw-bold text-primary">{{ $email->invoice->invoice_number }}</code>
+    @elseif($email->invoice_number && $email->invoice_number != 'NA')
         <code class="fw-bold text-primary">{{ $email->invoice_number }}</code>
     @else
         <span class="text-muted">-</span>
