@@ -265,7 +265,7 @@ public function viewEmail(Request $request)
             'from_email' => $email->from_email,
             'subject' => $email->subject,
             'body' => $email->body,
-            'received_at' => $email->received_at->format('d/m/Y H:i:s'),
+            'received_at' => $email->received_at ? $email->received_at->format('d/m/Y H:i:s') : null,
             'agent_name' => $email->agent_name,
             'tour_ref' => $email->tour_ref,
         ]
