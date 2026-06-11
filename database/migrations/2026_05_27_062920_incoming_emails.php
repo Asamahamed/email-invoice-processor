@@ -15,7 +15,7 @@ return new class extends Migration
             $table->string('from_email');
             $table->string('from_name')->nullable();
             $table->string('subject');
-            $table->text('body')->nullable();
+            $table->longText('body')->nullable();
             $table->text('body_preview')->nullable(); // Preview for listing
             $table->timestamp('received_at');
             
