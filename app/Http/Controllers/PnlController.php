@@ -176,7 +176,7 @@ class PnlController extends Controller
         $handle = fopen('php://temp', 'w+');
         
         // Headers
-        fputcsv($handle, ['S.No', 'Date', 'Vendor', 'Invoice #', 'IS Number', 'Country', 'Amount', 'Currency', 'Converted Amount', 'Status', 'Items Count']);
+        fputcsv($handle, ['S.No', 'Date', 'Vendor', 'Invoice #', 'Tour ref', 'Country', 'Amount', 'Currency', 'Converted Amount', 'Status', 'Items Count']);
         
         foreach ($records as $record) {
             fputcsv($handle, [
@@ -184,7 +184,7 @@ class PnlController extends Controller
                 $record->received_at ? $record->received_at->format('d/m/Y') : '',
                 $record->vendor_name,
                 $record->invoice_number,
-                $record->is_number,
+                $record->tour_ref,
                 $record->country_code,
                 $record->amount,
                 $record->currency,

@@ -105,10 +105,25 @@ public function processAndUpdateExcel(PnlRecord $record)
             ];
         }
         
-        // Write to Excel
+        // ========== CRITICAL: Check for existing entries before inserting ==========
         $excelPath = $this->getExcelFilePath($countryCode);
         $spreadsheet = $this->loadOrCreateSpreadsheet($excelPath, $countryCode);
-        $this->addItemsToSpreadsheet($spreadsheet, $allItems, $tourRef, $invoiceNumber);
+        
+        // Check if this Tour Number + Invoice Number combination already exists
+        $existingRows = $this->checkExistingEntries($spreadsheet, $tourRef, $invoiceNumber);
+        
+        if ($existingRows['found']) {
+            // UPDATE existing entries
+            Log::info("Updating existing entries for Tour: {$tourRef}, Invoice: {$invoiceNumber}");
+            $this->updateExistingEntries($spreadsheet, $allItems, $tourRef, $invoiceNumber, $existingRows['rows']);
+            $action = 'updated';
+        } else {
+            // INSERT new entries
+            Log::info("Inserting new entries for Tour: {$tourRef}, Invoice: {$invoiceNumber}");
+            $this->addItemsToSpreadsheet($spreadsheet, $allItems, $tourRef, $invoiceNumber);
+            $action = 'inserted';
+        }
+        
         $this->saveSpreadsheet($spreadsheet, $excelPath);
         
         // Update the record
@@ -119,6 +134,8 @@ public function processAndUpdateExcel(PnlRecord $record)
         
         return [
             'success' => true,
+            'action' => $action,
+            'message' => $action == 'updated' ? "✅ PnL Updated successfully!" : "✅ New PnL Inserted!",
             'items_count' => count($allItems),
             'hotels_count' => $items->where('type', 'HOTEL')->count(),
             'attraction_count' => $items->where('type', 'ATTRACTION')->count(),
@@ -134,6 +151,154 @@ public function processAndUpdateExcel(PnlRecord $record)
     }
 }
 
+/**
+ * Check if entries already exist for given Tour Number and Invoice Number
+ * Returns array with 'found' boolean and 'rows' array of row numbers
+ */
+private function checkExistingEntries($spreadsheet, $tourRef, $invoiceNumber)
+{
+    $sheet = $spreadsheet->getActiveSheet();
+    $highestRow = $sheet->getHighestRow();
+    
+    $existingRows = [];
+    
+    if ($highestRow < 2) {
+        return ['found' => false, 'rows' => []];
+    }
+    
+    // Scan through all rows to find matching Tour Number + Invoice Number
+    for ($row = 2; $row <= $highestRow; $row++) {
+        $existingTourRef = $sheet->getCell("B{$row}")->getValue();
+        $existingInvoice = $sheet->getCell("C{$row}")->getValue();
+        
+        // Match both Tour Number AND Invoice Number
+        if ($existingTourRef == $tourRef && $existingInvoice == $invoiceNumber) {
+            $existingRows[] = $row;
+        }
+    }
+    
+    return [
+        'found' => !empty($existingRows),
+        'rows' => $existingRows
+    ];
+}
+
+/**
+ * Update existing entries in the spreadsheet
+ * First delete old entries, then insert new ones at the same positions
+ */
+private function updateExistingEntries($spreadsheet, $newItems, $tourRef, $invoiceNumber, $existingRows)
+{
+    $sheet = $spreadsheet->getActiveSheet();
+    
+    // Sort rows in descending order to delete from bottom up (preserves row numbers)
+    rsort($existingRows);
+    
+    // Delete all existing rows for this combination
+    foreach ($existingRows as $row) {
+        $sheet->removeRow($row);
+        Log::info("Removed existing row {$row} for Tour: {$tourRef}, Invoice: {$invoiceNumber}");
+    }
+    
+    // Now add the new items at the bottom
+    $currentRow = $sheet->getHighestRow() + 1;
+    if ($currentRow < 2) {
+        $currentRow = 2;
+    }
+    
+    foreach ($newItems as $item) {
+        $sheet->setCellValue("A{$currentRow}", $item['sno']);
+        $sheet->setCellValue("B{$currentRow}", $tourRef ?? '-');
+        $sheet->setCellValue("C{$currentRow}", $invoiceNumber ?? '-');
+        $sheet->setCellValue("D{$currentRow}", $item['type']);
+        $sheet->setCellValue("E{$currentRow}", $item['start_date']);
+        $sheet->setCellValue("F{$currentRow}", $item['end_date']);
+        $sheet->setCellValue("G{$currentRow}", $item['credit_type']);
+        $sheet->setCellValue("H{$currentRow}", $item['agent_name']);
+        $sheet->setCellValue("I{$currentRow}", $item['hotel_name'] ?? '-');
+        $sheet->setCellValue("J{$currentRow}", $item['amount_usd']);
+        $sheet->setCellValue("K{$currentRow}", $item['exchange_rate']);
+        $sheet->setCellValue("L{$currentRow}", $item['amount_local']);
+        $sheet->setCellValue("M{$currentRow}", $item['remarks']);
+        
+        // Color coding
+        $colors = [
+            'INVOICE' => 'D5E8D4',
+            'HOTEL' => 'FFF2CC',
+            'TRANSPORT' => 'DDEBF7',
+            'TOUR TRANSFER' => 'E2EFDA',
+            'ATTRACTION' => 'FCE4D6'
+        ];
+        
+        if (isset($colors[$item['type']])) {
+            $sheet->getStyle("A{$currentRow}:M{$currentRow}")->getFill()
+                ->setFillType(\PhpOffice\PhpSpreadsheet\Style\Fill::FILL_SOLID)
+                ->getStartColor()->setRGB($colors[$item['type']]);
+        }
+        
+        $sheet->getStyle("A{$currentRow}:M{$currentRow}")->applyFromArray([
+            'borders' => ['allBorders' => ['borderStyle' => \PhpOffice\PhpSpreadsheet\Style\Border::BORDER_THIN]]
+        ]);
+        
+        Log::info("Added updated row {$currentRow}: Type={$item['type']}, Amount=\${$item['amount_usd']}");
+        $currentRow++;
+    }
+}
+
+/**
+ * Insert new entries (no existing found)
+ */
+private function addItemsToSpreadsheet($spreadsheet, $items, $tourRef, $invoiceNumber)
+{
+    $sheet = $spreadsheet->getActiveSheet();
+    $row = $sheet->getHighestRow() + 1;
+    
+    if ($row < 2) {
+        $row = 2;
+    }
+    
+    foreach ($items as $item) {
+        $sheet->setCellValue("A{$row}", $item['sno']);
+        $sheet->setCellValue("B{$row}", $tourRef ?? '-');
+        $sheet->setCellValue("C{$row}", $invoiceNumber ?? '-');
+        $sheet->setCellValue("D{$row}", $item['type']);
+        $sheet->setCellValue("E{$row}", $item['start_date']);
+        $sheet->setCellValue("F{$row}", $item['end_date']);
+        $sheet->setCellValue("G{$row}", $item['credit_type']);
+        $sheet->setCellValue("H{$row}", $item['agent_name']);
+        $sheet->setCellValue("I{$row}", $item['hotel_name'] ?? '-');
+        $sheet->setCellValue("J{$row}", $item['amount_usd']);
+        $sheet->setCellValue("K{$row}", $item['exchange_rate']);
+        $sheet->setCellValue("L{$row}", $item['amount_local']);
+        $sheet->setCellValue("M{$row}", $item['remarks']);
+        
+        // Color coding
+        $colors = [
+            'INVOICE' => 'D5E8D4',
+            'HOTEL' => 'FFF2CC',
+            'TRANSPORT' => 'DDEBF7',
+            'TOUR TRANSFER' => 'E2EFDA',
+            'ATTRACTION' => 'FCE4D6'
+        ];
+        
+        if (isset($colors[$item['type']])) {
+            $sheet->getStyle("A{$row}:M{$row}")->getFill()
+                ->setFillType(\PhpOffice\PhpSpreadsheet\Style\Fill::FILL_SOLID)
+                ->getStartColor()->setRGB($colors[$item['type']]);
+        }
+        
+        $sheet->getStyle("A{$row}:M{$row}")->applyFromArray([
+            'borders' => ['allBorders' => ['borderStyle' => \PhpOffice\PhpSpreadsheet\Style\Border::BORDER_THIN]]
+        ]);
+        
+        Log::info("Added new row {$row}: Type={$item['type']}, Amount=\${$item['amount_usd']}");
+        $row++;
+    }
+    
+    foreach (range('A', 'M') as $col) {
+        $sheet->getColumnDimension($col)->setAutoSize(true);
+    }
+}
     /**
      * Extract hotels from Hotels/Cruises table - IMPROVED for Vietnam format
      */
@@ -525,57 +690,7 @@ public function processAndUpdateExcel(PnlRecord $record)
         return $spreadsheet;
     }
 
-    private function addItemsToSpreadsheet($spreadsheet, $items, $tourRef, $invoiceNumber)
-    {
-        $sheet = $spreadsheet->getActiveSheet();
-        $row = $sheet->getHighestRow() + 1;
-        
-        if ($row == 1) {
-            $row = 2;
-        }
-        
-        foreach ($items as $item) {
-            $sheet->setCellValue("A{$row}", $item['sno']);
-            $sheet->setCellValue("B{$row}", $tourRef ?? '-');
-            $sheet->setCellValue("C{$row}", $invoiceNumber ?? '-');
-            $sheet->setCellValue("D{$row}", $item['type']);
-            $sheet->setCellValue("E{$row}", $item['start_date']);
-            $sheet->setCellValue("F{$row}", $item['end_date']);
-            $sheet->setCellValue("G{$row}", $item['credit_type']);
-            $sheet->setCellValue("H{$row}", $item['agent_name']);
-            $sheet->setCellValue("I{$row}", $item['hotel_name'] ?? '-');
-            $sheet->setCellValue("J{$row}", $item['amount_usd']);
-            $sheet->setCellValue("K{$row}", $item['exchange_rate']);
-            $sheet->setCellValue("L{$row}", $item['amount_local']);
-            $sheet->setCellValue("M{$row}", $item['remarks']);
-            
-            // Color coding
-            $colors = [
-                'INVOICE' => 'D5E8D4',
-                'HOTEL' => 'FFF2CC',
-                'TRANSPORT' => 'DDEBF7',
-                'TOUR TRANSFER' => 'E2EFDA',
-                'ATTRACTION' => 'FCE4D6'
-            ];
-            
-            if (isset($colors[$item['type']])) {
-                $sheet->getStyle("A{$row}:M{$row}")->getFill()
-                    ->setFillType(Fill::FILL_SOLID)
-                    ->getStartColor()->setRGB($colors[$item['type']]);
-            }
-            
-            $sheet->getStyle("A{$row}:M{$row}")->applyFromArray([
-                'borders' => ['allBorders' => ['borderStyle' => Border::BORDER_THIN]]
-            ]);
-            
-            Log::info("Added row {$row}: Type={$item['type']}, Amount=\${$item['amount_usd']}");
-            $row++;
-        }
-        
-        foreach (range('A', 'M') as $col) {
-            $sheet->getColumnDimension($col)->setAutoSize(true);
-        }
-    }
+
 
     private function saveSpreadsheet($spreadsheet, $path)
     {

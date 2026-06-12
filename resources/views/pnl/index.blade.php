@@ -161,7 +161,7 @@
                         <th>From</th>
                         <th>Vendor</th>
                         <th>Subject</th>
-                        <th>IS Number</th>
+                        <th>Tour ref</th>
                         <th>Invoice #</th>
                         <th>Category</th>
                         <th>Amount</th>
@@ -196,8 +196,8 @@
                                     {{ Str::limit($record->subject, 40) }}
                                 </div>
                             </td>
-                            <td data-label="IS Number">
-                                <code class="is-number">{{ $record->is_number ?: '-' }}</code>
+                            <td data-label="Tour ref">
+                                <code class="is-number">{{ $record->tour_ref ?: '-' }}</code>
                             </td>
                             <td data-label="Invoice #">
                                 <code class="invoice-number">{{ $record->invoice_number ?: '-' }}</code>
@@ -890,30 +890,47 @@ $(document).ready(function() {
     });
     
     // Update PnL button
-    $('.update-pnl-btn').on('click', function(e) {
-        e.stopPropagation();
-        const id = $(this).data('id');
-        const btn = $(this);
-        
-        if (!confirm('Process this email and update PnL Excel?')) return;
-        
-        btn.html('<i class="fas fa-spinner fa-spin"></i>').prop('disabled', true);
-        
-        $.ajax({
-            url: '{{ route("pnl.update-excel") }}',
-            method: 'POST',
-            data: { id: id, _token: '{{ csrf_token() }}' },
-            success: function(response) {
-                toastr.success(response.message || 'PnL updated successfully!');
-            },
-            error: function(xhr) {
-                toastr.error(xhr.responseJSON?.message || 'Update failed');
-            },
-            complete: function() {
-                btn.html('<i class="fas fa-file-excel"></i>').prop('disabled', false);
+   // Update PnL button
+$('.update-pnl-btn').on('click', function(e) {
+    e.stopPropagation();
+    const id = $(this).data('id');
+    const btn = $(this);
+    
+    if (!confirm('Process this email and update PnL Excel?')) return;
+    
+    btn.html('<i class="fas fa-spinner fa-spin"></i>').prop('disabled', true);
+    
+    $.ajax({
+        url: '{{ route("pnl.update-excel") }}',
+        method: 'POST',
+        data: { id: id, _token: '{{ csrf_token() }}' },
+        success: function(response) {
+            // Show different message for update vs insert
+            if (response.action === 'updated') {
+                toastr.success('✅ PnL Updated! Previous entries were replaced with new data.', {
+                    timeOut: 5000
+                });
+            } else {
+                toastr.success(response.message || '✅ New PnL Inserted successfully!', {
+                    timeOut: 5000
+                });
             }
-        });
+            
+            // Optional: Show item count
+            if (response.items_count) {
+                toastr.info(`📊 ${response.items_count} items processed`, {
+                    timeOut: 3000
+                });
+            }
+        },
+        error: function(xhr) {
+            toastr.error(xhr.responseJSON?.message || 'Update failed');
+        },
+        complete: function() {
+            btn.html('<i class="fas fa-file-excel"></i>').prop('disabled', false);
+        }
     });
+});
 });
 </script>
 @endpush
