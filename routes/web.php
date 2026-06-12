@@ -3,6 +3,7 @@
 use App\Http\Controllers\InvoiceController;
 use App\Http\Controllers\PnlController;
 use App\Http\Controllers\CreditController;
+use App\Services\ClientManager;
 
 // ========== INVOICE ROUTES ==========
 Route::get('/', [InvoiceController::class, 'index'])->name('index');
@@ -42,3 +43,5 @@ Route::get('/test-mail', function () {
     $client->connect();
     return 'Connected Successfully';
 });
+
+Route::post('/generate-revised-invoice', [InvoiceController::class, 'generateRevisedInvoice'])->name('generate.revised.invoice');

@@ -310,6 +310,7 @@ class PnlEmailService
                     'meals_total' => $mealsTotal,
                     'items_count' => count($pnlItems)
                 ]),
+                 'agent_name' => $agentName,
             ]);
             
             // Save individual items
