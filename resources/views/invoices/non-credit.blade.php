@@ -33,7 +33,7 @@
                         <div class="col-md-4 mb-3">
                             <div class="stat-card">
                                 <div class="stat-title">Total Records</div>
-                                <h3 class="stat-value">{{ $emails->count() }}</h3>
+                                <h3 class="stat-value">{{ $emails->total() }}</h3>
                             </div>
                         </div>
                         <div class="col-md-4 mb-3">
@@ -51,10 +51,7 @@
                     </div>
                     
                     <!-- Info Alert -->
-                    <div class="alert alert-info mb-4">
-                        <i class="fas fa-info-circle me-2"></i>
-                        <strong>Non-Credit (Sharmila):</strong> These invoices include a <strong>5% handling fee</strong> and are generated in <strong>INR currency</strong> with applicable GST (CGST + SGST).
-                    </div>
+                    
                     
                     <!-- Search Filter -->
                     <div class="filter-section mb-4">
@@ -106,7 +103,7 @@
                             <tbody>
                                 @foreach($emails as $index => $email)
                                 <tr>
-                                    <td>{{ $loop->iteration }}</td>
+                                    <td>{{ $emails->firstItem() + $index }}</td>
                                     <td>
                                         {{ $email->received_at ? $email->received_at->format('d/m/Y') : '-' }}<br>
                                         <small class="text-muted">{{ $email->received_at ? $email->received_at->format('H:i') : '' }}</small>
@@ -155,18 +152,18 @@
                                     <td>
                                         <div class="action-buttons">
                                             @if($email->processing_status == 'invoice_generated' && $email->invoice)
-                                                <a href="{{ route('download', $email->invoice->id) }}" class="btn btn-accent btn-sm">
+                                                <a href="{{ route('invoice.view', $email->invoice->id) }}" class="btn btn-success btn-sm" target="_blank">
+                                                    <i class="fas fa-eye me-1"></i> View
+                                                </a>
+                                                <a href="{{ route('invoice.download', $email->invoice->id) }}" class="btn btn-accent btn-sm">
                                                     <i class="fas fa-download me-1"></i> PDF
                                                 </a>
                                             @else
-                                                <form action="{{ route('generate.invoice') }}" method="POST">
-                                                    @csrf
-                                                    <input type="hidden" name="email_id" value="{{ $email->id }}">
-                                                    <button type="submit" class="btn btn-primary btn-sm" 
-                                                            onclick="return confirm('Generate invoice for this record?')">
-                                                        <i class="fas fa-file-invoice me-1"></i> Generate
-                                                    </button>
-                                                </form>
+                                                <button type="button" class="btn btn-primary btn-sm generate-invoice-btn" 
+                                                        data-email-id="{{ $email->id }}"
+                                                        onclick="generateNonCreditInvoice(this)">
+                                                    <i class="fas fa-file-invoice me-1"></i> Generate
+                                                </button>
                                             @endif
                                         </div>
                                     </td>
@@ -201,4 +198,46 @@
         </div>
     </div>
 </div>
+
+@push('scripts')
+<script>
+function generateNonCreditInvoice(button) {
+    const emailId = $(button).data('email-id');
+    const $button = $(button);
+    const originalHtml = $button.html();
+    
+    if (!confirm('Generate invoice for this record?')) return;
+    
+    $button.prop('disabled', true).html('<i class="fas fa-spinner fa-spin"></i> Generating...');
+    
+    $.ajax({
+        url: '{{ route("generate.and.view.invoice") }}',
+        method: 'POST',
+        data: {
+            email_id: emailId,
+            _token: '{{ csrf_token() }}'
+        },
+        success: function(response) {
+            if (response.success) {
+                window.open('{{ url("/invoice/view") }}/' + response.invoice_id, '_blank');
+                toastr.success(response.message || 'Invoice generated successfully!');
+                setTimeout(() => location.reload(), 1500);
+            } else {
+                toastr.error(response.message || 'Failed to generate invoice');
+                $button.prop('disabled', false).html(originalHtml);
+            }
+        },
+        error: function(xhr) {
+            let errorMsg = 'Error generating invoice';
+            if (xhr.responseJSON && xhr.responseJSON.message) {
+                errorMsg = xhr.responseJSON.message;
+            }
+            toastr.error(errorMsg);
+            $button.prop('disabled', false).html(originalHtml);
+        }
+    });
+}
+</script>
+@endpush
+
 @endsection

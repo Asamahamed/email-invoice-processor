@@ -57,69 +57,65 @@ class InvoiceController extends Controller
         return view('invoices.index', compact('emails', 'stats'));
     }
     
-    public function nonCredit(Request $request)
-    {
-        $query = IncomingEmail::with('invoice')->where('credit_type', 'non_credit')->latest('received_at');
-        
-        if ($request->filled('search')) {
-            $search = $request->search;
-            $query->where(function($q) use ($search) {
-                $q->where('subject', 'like', "%{$search}%")
-                  ->orWhere('agent_name', 'like', "%{$search}%")
-                  ->orWhere('guest_name', 'like', "%{$search}%")
-                  ->orWhere('tour_ref', 'like', "%{$search}%");
-            });
-        }
-        
-        if ($request->filled('date_from')) {
-            $query->whereDate('received_at', '>=', $request->date_from);
-        }
-        if ($request->filled('date_to')) {
-            $query->whereDate('received_at', '<=', $request->date_to);
-        }
-        
-        $emails = $query->paginate(20)->withQueryString();
-        
-        $stats = [
-            'total' => IncomingEmail::where('credit_type', 'non_credit')->count(),
-            'credit' => IncomingEmail::where('credit_type', 'credit')->count(),
-            'non_credit' => IncomingEmail::where('credit_type', 'non_credit')->count(),
-            'invoices' => GeneratedInvoice::count(),
-        ];
-        
-        return view('invoices.non-credit', compact('emails', 'stats'));
+public function credit(Request $request)
+{
+    $query = GeneratedInvoice::with('email')->latest();
+    
+    // Apply filters
+    if ($request->filled('search')) {
+        $search = $request->search;
+        $query->where(function($q) use ($search) {
+            $q->where('invoice_number', 'like', "%{$search}%")
+              ->orWhere('customer_name', 'like', "%{$search}%")
+              ->orWhere('tour_ref', 'like', "%{$search}%");
+        });
     }
     
-    public function credit(Request $request)
-    {
-        $query = GeneratedInvoice::with('email')->latest();
-        
-        if ($request->filled('search')) {
-            $search = $request->search;
-            $query->where(function($q) use ($search) {
-                $q->where('invoice_number', 'like', "%{$search}%")
-                  ->orWhere('customer_name', 'like', "%{$search}%")
-                  ->orWhere('tour_ref', 'like', "%{$search}%");
-            });
-        }
-        
-        if ($request->filled('date_from')) {
-            $query->whereDate('invoice_date', '>=', $request->date_from);
-        }
-        if ($request->filled('date_to')) {
-            $query->whereDate('invoice_date', '<=', $request->date_to);
-        }
-        
-        $invoices = $query->paginate(20)->withQueryString();
-        
-        $stats = [
-            'total' => GeneratedInvoice::count(),
-            'credit_total' => GeneratedInvoice::where('invoice_type', 'credit')->sum('grand_total'),
-            'non_credit_total' => GeneratedInvoice::where('invoice_type', 'non_credit')->sum('grand_total'),
-        ];
-        
-        return view('invoices.credit', compact('invoices', 'stats'));
+    if ($request->filled('date_from')) {
+        $query->whereDate('invoice_date', '>=', $request->date_from);
     }
+    if ($request->filled('date_to')) {
+        $query->whereDate('invoice_date', '<=', $request->date_to);
+    }
+    
+    $invoices = $query->paginate(20)->withQueryString();
+    
+    return view('invoices.credit', compact('invoices'));
+}
+
+public function nonCredit(Request $request)
+{
+    $query = IncomingEmail::where('credit_type', 'non_credit')->latest('received_at');
+    
+    if ($request->filled('search')) {
+        $search = $request->search;
+        $query->where(function($q) use ($search) {
+            $q->where('subject', 'like', "%{$search}%")
+              ->orWhere('agent_name', 'like', "%{$search}%")
+              ->orWhere('guest_name', 'like', "%{$search}%")
+              ->orWhere('tour_ref', 'like', "%{$search}%");
+        });
+    }
+    
+    if ($request->filled('date_from')) {
+        $query->whereDate('received_at', '>=', $request->date_from);
+    }
+    if ($request->filled('date_to')) {
+        $query->whereDate('received_at', '<=', $request->date_to);
+    }
+    
+    $perPage = $request->get('per_page', 20);
+    $emails = $query->paginate($perPage)->withQueryString();
+    
+    $stats = [
+        'total' => IncomingEmail::where('credit_type', 'non_credit')->count(),
+        'credit' => IncomingEmail::where('credit_type', 'credit')->count(),
+        'non_credit' => IncomingEmail::where('credit_type', 'non_credit')->count(),
+        'invoices' => GeneratedInvoice::count(),
+    ];
+    
+    return view('invoices.non-credit', compact('emails', 'stats'));
+}
     
     public function processNow()
     {
