@@ -2,607 +2,919 @@
 @extends('layouts.app')
 
 @section('content')
-    <div class="container-fluid">
-        <div class="card">
-            <div class="card-header bg-info text-white">
-                <div class="d-flex justify-content-between align-items-center flex-wrap">
-                    <h3 class="mb-0">📊 Profit & Loss (PnL) - Vendor Expenses</h3>
-                    <div class="mt-2 mt-sm-0">
-                        <form action="{{ route('pnl.fetch') }}" method="POST" style="display: inline;">
-                            @csrf
-                            <button type="submit" class="btn btn-light btn-sm">
-                                🔄 Fetch PnL Emails
-                            </button>
-                        </form>
-                        <a href="{{ route('pnl.export') }}" class="btn btn-success btn-sm">
-                            📥 Export to Excel
+<div class="pnl-container">
+    <!-- Header Section -->
+    <div class="pnl-header mb-4">
+        <div class="d-flex flex-column flex-md-row justify-content-between align-items-start align-items-md-center gap-3">
+            <div>
+                <h1 class="pnl-title">
+                    <i class="fas fa-chart-line me-2"></i> Profit & Loss Dashboard
+                </h1>
+                <p class="pnl-subtitle">Vendor Expenses & Financial Overview</p>
+            </div>
+            <div class="d-flex gap-2">
+                <button type="button" class="btn-pnl btn-pnl-primary" onclick="event.preventDefault(); document.getElementById('fetch-form').submit();">
+                    <i class="fas fa-sync-alt me-1"></i> Fetch Emails
+                </button>
+                <a href="{{ route('pnl.export') }}" class="btn-pnl btn-pnl-success">
+                    <i class="fas fa-file-excel me-1"></i> Export Excel
+                </a>
+                <form id="fetch-form" action="{{ route('pnl.fetch') }}" method="POST" class="d-none">
+                    @csrf
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Stats Cards -->
+    <div class="row g-4 mb-5">
+        <div class="col-md-3 col-sm-6">
+            <div class="stat-card stat-card-primary">
+                <div class="stat-card-icon">
+                    <i class="fas fa-receipt"></i>
+                </div>
+                <div class="stat-card-content">
+                    <span class="stat-card-label">Total Records</span>
+                    <h3 class="stat-card-value">{{ number_format($stats['total'] ?? 0) }}</h3>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3 col-sm-6">
+            <div class="stat-card stat-card-success">
+                <div class="stat-card-icon">
+                    <i class="fas fa-dollar-sign"></i>
+                </div>
+                <div class="stat-card-content">
+                    <span class="stat-card-label">Total Amount</span>
+                    <h3 class="stat-card-value">${{ number_format($stats['total_amount'] ?? 0, 2) }}</h3>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3 col-sm-6">
+            <div class="stat-card stat-card-warning">
+                <div class="stat-card-icon">
+                    <i class="fas fa-clock"></i>
+                </div>
+                <div class="stat-card-content">
+                    <span class="stat-card-label">Pending</span>
+                    <h3 class="stat-card-value">{{ number_format($stats['pending'] ?? 0) }}</h3>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3 col-sm-6">
+            <div class="stat-card stat-card-info">
+                <div class="stat-card-icon">
+                    <i class="fas fa-check-circle"></i>
+                </div>
+                <div class="stat-card-content">
+                    <span class="stat-card-label">Approved</span>
+                    <h3 class="stat-card-value">{{ number_format($stats['approved'] ?? 0) }}</h3>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Filter Section -->
+    <div class="filter-card mb-4">
+        <div class="filter-card-header">
+            <i class="fas fa-filter me-2"></i> Filter Records
+        </div>
+        <div class="filter-card-body">
+            <form method="GET" class="row g-3">
+                <div class="col-md-3">
+                    <label class="filter-label">Search</label>
+                    <div class="input-group">
+                        <span class="input-group-text"><i class="fas fa-search"></i></span>
+                        <input type="text" name="search" class="form-control form-control-pnl" 
+                            placeholder="Vendor, Invoice, IS number..." value="{{ request('search') }}">
+                    </div>
+                </div>
+                <div class="col-md-2">
+                    <label class="filter-label">Category</label>
+                    <select name="category" class="form-select form-select-pnl">
+                        <option value="">All Categories</option>
+                        @foreach ($categories ?? [] as $cat)
+                            <option value="{{ $cat }}" {{ request('category') == $cat ? 'selected' : '' }}>
+                                {{ $cat }}
+                            </option>
+                        @endforeach
+                    </select>
+                </div>
+                <div class="col-md-2">
+                    <label class="filter-label">Country</label>
+                    <select name="country" class="form-select form-select-pnl">
+                        <option value="">All Countries</option>
+                        @foreach ($countries ?? [] as $code => $name)
+                            <option value="{{ $code }}" {{ request('country') == $code ? 'selected' : '' }}>
+                                {{ $name }}
+                            </option>
+                        @endforeach
+                    </select>
+                </div>
+                <div class="col-md-2">
+                    <label class="filter-label">Read Status</label>
+                    <select name="read_filter" class="form-select form-select-pnl">
+                        <option value="">All</option>
+                        <option value="read" {{ request('read_filter') == 'read' ? 'selected' : '' }}>Read</option>
+                        <option value="unread" {{ request('read_filter') == 'unread' ? 'selected' : '' }}>Unread</option>
+                    </select>
+                </div>
+                <div class="col-md-2">
+                    <label class="filter-label">Approval Status</label>
+                    <select name="status" class="form-select form-select-pnl">
+                        <option value="">All</option>
+                        <option value="pending" {{ request('status') == 'pending' ? 'selected' : '' }}>Pending</option>
+                        <option value="approved" {{ request('status') == 'approved' ? 'selected' : '' }}>Approved</option>
+                        <option value="rejected" {{ request('status') == 'rejected' ? 'selected' : '' }}>Rejected</option>
+                    </select>
+                </div>
+                <div class="col-md-2">
+                    <label class="filter-label">Date From</label>
+                    <input type="date" name="date_from" class="form-control form-control-pnl" value="{{ request('date_from') }}">
+                </div>
+                <div class="col-md-2">
+                    <label class="filter-label">Date To</label>
+                    <input type="date" name="date_to" class="form-control form-control-pnl" value="{{ request('date_to') }}">
+                </div>
+                <div class="col-12">
+                    <div class="d-flex gap-2">
+                        <button type="submit" class="btn-pnl btn-pnl-primary">
+                            <i class="fas fa-search me-1"></i> Apply Filters
+                        </button>
+                        <a href="{{ route('pnl.index') }}" class="btn-pnl btn-pnl-secondary">
+                            <i class="fas fa-undo-alt me-1"></i> Reset
                         </a>
                     </div>
                 </div>
-            </div>
-
-            <div class="card-body">
-                <!-- Stats Cards -->
-                <div class="row mb-4">
-                    <div class="col-md-3 col-sm-6 mb-3">
-                        <div class="stat-card">
-                            <div class="stat-title">Total Records</div>
-                            <h3 class="stat-value">{{ $stats['total'] ?? 0 }}</h3>
-                        </div>
-                    </div>
-                    <div class="col-md-3 col-sm-6 mb-3">
-                        <div class="stat-card">
-                            <div class="stat-title">Total Amount </div>
-                            <h3 class="stat-value">$ {{ number_format($stats['total_amount'] ?? 0, 2) }}</h3>
-                        </div>
-                    </div>
-                    <div class="col-md-3 col-sm-6 mb-3">
-                        <div class="stat-card">
-                            <div class="stat-title">Pending</div>
-                            <h3 class="stat-value">{{ $stats['pending'] ?? 0 }}</h3>
-                        </div>
-                    </div>
-                    <div class="col-md-3 col-sm-6 mb-3">
-                        <div class="stat-card">
-                            <div class="stat-title">Approved</div>
-                            <h3 class="stat-value">{{ $stats['approved'] ?? 0 }}</h3>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Filter Section -->
-                <div class="filter-section mb-4">
-                    <form method="GET" class="row g-3">
-                        <div class="col-md-3">
-                            <input type="text" name="search" class="form-control"
-                                placeholder="Search vendor, invoice, IS number..." value="{{ request('search') }}">
-                        </div>
-                        <div class="col-md-2">
-                            <select name="category" class="form-select">
-                                <option value="">All Categories</option>
-                                @foreach ($categories as $cat)
-                                    <option value="{{ $cat }}" {{ request('category') == $cat ? 'selected' : '' }}>
-                                        {{ $cat }}</option>
-                                @endforeach
-                            </select>
-                        </div>
-                        <div class="col-md-2">
-                            <select name="country" class="form-select">
-                                <option value="">All Countries</option>
-                                @foreach ($countries as $code => $name)
-                                    <option value="{{ $code }}"
-                                        {{ request('country') == $code ? 'selected' : '' }}>{{ $name }}</option>
-                                @endforeach
-                            </select>
-                        </div>
-                        <div class="col-md-2">
-                            <select name="read_filter" class="form-select">
-                                <option value="">All Status</option>
-                                <option value="read" {{ request('read_filter') == 'read' ? 'selected' : '' }}>Read
-                                </option>
-                                <option value="unread" {{ request('read_filter') == 'unread' ? 'selected' : '' }}>Unread
-                                </option>
-                            </select>
-                        </div>
-                        <div class="col-md-2">
-                            <select name="status" class="form-select">
-                                <option value="">All Approval</option>
-                                <option value="pending" {{ request('status') == 'pending' ? 'selected' : '' }}>Pending
-                                </option>
-                                <option value="approved" {{ request('status') == 'approved' ? 'selected' : '' }}>Approved
-                                </option>
-                                <option value="rejected" {{ request('status') == 'rejected' ? 'selected' : '' }}>Rejected
-                                </option>
-                            </select>
-                        </div>
-                        <div class="col-md-2">
-                            <input type="date" name="date_from" class="form-control" value="{{ request('date_from') }}">
-                        </div>
-                        <div class="col-md-2">
-                            <input type="date" name="date_to" class="form-control" value="{{ request('date_to') }}">
-                        </div>
-                        <div class="col-12">
-                            <button type="submit" class="btn btn-primary">Apply Filters</button>
-                            <a href="{{ route('pnl.index') }}" class="btn btn-secondary">Reset</a>
-                        </div>
-                    </form>
-                </div>
-
-                <!-- Table with clickable rows -->
-                <div class="table-responsive">
-                    <table class="table table-hover">
-                        <thead>
-                            <tr>
-                                <th>S.No</th>
-                                <th>Date</th>
-                                <th>From</th>
-                                <th>Vendor Name</th>
-                                <th>Subject</th>
-                                <th>IS Number</th>
-                                <th>Invoice #</th>
-                                <th>Category</th>
-                                <th>Amount</th>
-                                <th>Currency</th>
-                                <th>Status</th>
-                                <th style="width: 80px;">Actions</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            @forelse($pnlRecords as $record)
-                                <tr class="pnl-row" data-id="{{ $record->id }}" style="cursor: pointer;">
-                                    <td>{{ $record->sno ?? $loop->iteration }}</td>
-                                    <td>{{ $record->received_at->format('d/m/Y H:i') }}</td>
-                                    <td>
-                                        <div class="small">{{ $record->from_address ?: '-' }}</div>
-                                        <div class="text-muted small">{{ $record->from_email }}</div>
-                                    </td>
-                                    <td>
-                                        <div>{{ $record->vendor_name ?: '-' }}</div>
-                                        @if ($record->country_code)
-                                            <span class="badge bg-secondary">{{ $record->country_code }}</span>
-                                        @endif
-                                    </td>
-                                    <td>
-                                        <div class="text-truncate" style="max-width: 200px;">
-                                            {{ Str::limit($record->subject, 50) }}</div>
-                                    </td>
-                                    <td><code>{{ $record->is_number ?: '-' }}</code></td>
-                                    <td>{{ $record->invoice_number ?: '-' }}</td>
-                                    <td>
-                                        @if ($record->category == 'Multi')
-                                            <span class="badge bg-info">Multiple</span>
-                                        @else
-                                            <span class="badge bg-secondary">{{ $record->category ?: 'Other' }}</span>
-                                        @endif
-                                    </td>
-                                   <td class="fw-bold">
-    {{ number_format($record->amount, 2) }}
-</td>
-<td>USD</td>
-                                    <td>{{ $record->currency ?: 'SGD' }}</td>
-                                    <td>
-                                        @if ($record->read_status == 'unread')
-                                            <span class="badge bg-info">Unread</span>
-                                        @else
-                                            <span class="badge bg-success">Read</span>
-                                        @endif
-                                        <br>
-                                        {{-- @if ($record->status == 'pending')
-                                    <span class="badge bg-warning mt-1">Pending</span>
-                                @elseif($record->status == 'approved')
-                                    <span class="badge bg-success mt-1">Approved</span>
-                                @else
-                                    <span class="badge bg-danger mt-1">Rejected</span>
-                                @endif --}}
-                                    </td>
-                                    <!-- In the actions column, add this button next to existing ones -->
-                                    <td>
-                                        <button class="btn btn-sm btn-success update-pnl-btn" data-id="{{ $record->id }}"
-                                            data-bs-toggle="tooltip" title="Update PnL to Excel">
-                                            <i class="fas fa-file-excel"></i> Update PnL
-                                        </button>
-                                        <a href="{{ route('pnl.view-excel', $record->country_code ?? 'SG') }}"
-                                            class="btn btn-sm btn-info" title="View PnL Excel Sheet" target="_blank">
-                                            <i class="fas fa-eye"></i> View PnL
-                                        </a>
-                                        {{-- <button class="btn btn-sm btn-info view-items-btn" data-id="{{ $record->id }}" data-bs-toggle="modal" data-bs-target="#itemsModal">
-        <i class="fas fa-list"></i>
-    </button> --}}
-                                        <!-- ... existing status dropdown ... -->
-                                    </td>
-                                    {{-- <td>
-                                <button class="btn btn-sm btn-info view-items-btn" data-id="{{ $record->id }}" data-bs-toggle="modal" data-bs-target="#itemsModal">
-                                    <i class="fas fa-list"></i>
-                                </button>
-                                <form action="{{ route('pnl.update-status', $record->id) }}" method="POST" style="display: inline;">
-                                    @csrf
-                                    <select name="status" class="form-select form-select-sm d-inline-block w-auto" onchange="this.form.submit()" style="width: 70px;">
-                                        <option value="pending" {{ $record->status == 'pending' ? 'selected' : '' }}>Pend</option>
-                                        <option value="approved" {{ $record->status == 'approved' ? 'selected' : '' }}>App</option>
-                                        <option value="rejected" {{ $record->status == 'rejected' ? 'selected' : '' }}>Rej</option>
-                                    </select>
-                                </form>
-                            </td> --}}
-                                </tr>
-                            @empty
-                                <tr>
-                                    <td colspan="12" class="text-center py-5">No PnL records found</td>
-                                </tr>
-                            @endforelse
-                        </tbody>
-                    </table>
-                </div>
-
-              <!-- Pagination -->
-<div class="d-flex justify-content-between align-items-center mt-4 flex-wrap gap-3">
-    <div class="text-muted small">
-        Showing {{ $pnlRecords->firstItem() ?? 0 }} to {{ $pnlRecords->lastItem() ?? 0 }} of {{ $pnlRecords->total() ?? 0 }} entries
+            </form>
+        </div>
     </div>
-    <div class="pagination-wrapper">
-        @if ($pnlRecords->hasPages())
-            <nav aria-label="Page navigation">
-                <ul class="pagination mb-0">
-                    {{-- Previous Page Link --}}
-                    @if ($pnlRecords->onFirstPage())
-                        <li class="page-item disabled">
-                            <span class="page-link">
-                                <i class="fas fa-chevron-left"></i> Previous
-                            </span>
+
+    <!-- Table Section -->
+    <div class="table-card">
+        <div class="table-responsive">
+            <table class="pnl-table">
+                <thead>
+                    <tr>
+                        <th>S.No</th>
+                        <th>Date</th>
+                        <th>From</th>
+                        <th>Vendor</th>
+                        <th>Subject</th>
+                        <th>IS Number</th>
+                        <th>Invoice #</th>
+                        <th>Category</th>
+                        <th>Amount</th>
+                        <th>Status</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @forelse($pnlRecords as $record)
+                        <tr class="pnl-row" data-id="{{ $record->id }}">
+                            <td data-label="S.No">{{ $record->sno ?? $loop->iteration }}</td>
+                            <td data-label="Date">
+                                <span class="date-badge">{{ $record->received_at->format('d/m/Y') }}</span>
+                                <small class="time-text">{{ $record->received_at->format('H:i') }}</small>
+                            </td>
+                            <td data-label="From">
+                                <div class="vendor-info">
+                                    <strong>{{ $record->from_address ?: '-' }}</strong>
+                                    <small>{{ $record->from_email }}</small>
+                                </div>
+                            </td>
+                            <td data-label="Vendor">
+                                <div class="vendor-info">
+                                    <strong>{{ $record->vendor_name ?: '-' }}</strong>
+                                    @if ($record->country_code)
+                                        <span class="country-badge">{{ $record->country_code }}</span>
+                                    @endif
+                                </div>
+                            </td>
+                            <td data-label="Subject">
+                                <div class="subject-text" title="{{ $record->subject }}">
+                                    {{ Str::limit($record->subject, 40) }}
+                                </div>
+                            </td>
+                            <td data-label="IS Number">
+                                <code class="is-number">{{ $record->is_number ?: '-' }}</code>
+                            </td>
+                            <td data-label="Invoice #">
+                                <code class="invoice-number">{{ $record->invoice_number ?: '-' }}</code>
+                            </td>
+                            <td data-label="Category">
+                                @if ($record->category == 'Multi')
+                                    <span class="badge-category badge-multi">Multiple</span>
+                                @elseif($record->category)
+                                    <span class="badge-category badge-default">{{ $record->category }}</span>
+                                @else
+                                    <span class="badge-category badge-other">Other</span>
+                                @endif
+                            </td>
+                            <td data-label="Amount">
+                                <div class="amount-value">${{ number_format($record->amount, 2) }}</div>
+                            </td>
+                            <td data-label="Status">
+                                @if ($record->read_status == 'unread')
+                                    <span class="status-badge status-unread">Unread</span>
+                                @else
+                                    <span class="status-badge status-read">Read</span>
+                                @endif
+                            </td>
+                            <td data-label="Actions">
+                                <div class="action-buttons">
+                                    <button class="action-btn action-btn-warning update-pnl-btn" 
+                                            data-id="{{ $record->id }}" title="Update PnL">
+                                        <i class="fas fa-file-excel"></i>
+                                    </button>
+                                    <a href="{{ route('pnl.view-excel', $record->country_code ?? 'SG') }}" 
+                                       class="action-btn action-btn-info" target="_blank" title="View PnL Sheet">
+                                        <i class="fas fa-eye"></i>
+                                    </a>
+                                </div>
+                            </td>
+                        </tr>
+                    @empty
+                        <tr>
+                            <td colspan="11" class="empty-state">
+                                <i class="fas fa-inbox mb-3" style="font-size: 48px; opacity: 0.5;"></i>
+                                <p>No PnL records found</p>
+                            </td>
+                        </tr>
+                    @endforelse
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Pagination -->
+        @if($pnlRecords->hasPages())
+           <!-- Pagination -->
+<div class="pagination-wrapper">
+    @if($pnlRecords->hasPages())
+        <nav aria-label="Page navigation">
+            <ul class="pagination">
+                {{-- Previous Page Link --}}
+                @if ($pnlRecords->onFirstPage())
+                    <li class="page-item disabled" aria-disabled="true">
+                        <span class="page-link">&laquo; Previous</span>
+                    </li>
+                @else
+                    <li class="page-item">
+                        <a class="page-link" href="{{ $pnlRecords->previousPageUrl() }}" rel="prev">&laquo; Previous</a>
+                    </li>
+                @endif
+
+                {{-- Pagination Elements --}}
+                @php
+                    $start = max(1, $pnlRecords->currentPage() - 2);
+                    $end = min($start + 4, $pnlRecords->lastPage());
+                    if ($end - $start < 4 && $start > 1) {
+                        $start = max(1, $end - 4);
+                    }
+                @endphp
+
+                @if ($start > 1)
+                    <li class="page-item">
+                        <a class="page-link" href="{{ $pnlRecords->url(1) }}">1</a>
+                    </li>
+                    @if ($start > 2)
+                        <li class="page-item disabled"><span class="page-link">...</span></li>
+                    @endif
+                @endif
+
+                @for ($page = $start; $page <= $end; $page++)
+                    @if ($page == $pnlRecords->currentPage())
+                        <li class="page-item active" aria-current="page">
+                            <span class="page-link">{{ $page }}</span>
                         </li>
                     @else
                         <li class="page-item">
-                            <a class="page-link" href="{{ $pnlRecords->previousPageUrl() }}" rel="prev">
-                                <i class="fas fa-chevron-left"></i> Previous
-                            </a>
+                            <a class="page-link" href="{{ $pnlRecords->url($page) }}">{{ $page }}</a>
                         </li>
                     @endif
+                @endfor
 
-                    {{-- Pagination Elements --}}
-                    @php
-                        $start = max(1, $pnlRecords->currentPage() - 2);
-                        $end = min($start + 4, $pnlRecords->lastPage());
-                        if ($end - $start < 4 && $start > 1) {
-                            $start = max(1, $end - 4);
-                        }
-                    @endphp
-
-                    @if ($start > 1)
-                        <li class="page-item">
-                            <a class="page-link" href="{{ $pnlRecords->url(1) }}">1</a>
-                        </li>
-                        @if ($start > 2)
-                            <li class="page-item disabled"><span class="page-link">...</span></li>
-                        @endif
+                @if ($end < $pnlRecords->lastPage())
+                    @if ($end < $pnlRecords->lastPage() - 1)
+                        <li class="page-item disabled"><span class="page-link">...</span></li>
                     @endif
+                    <li class="page-item">
+                        <a class="page-link" href="{{ $pnlRecords->url($pnlRecords->lastPage()) }}">{{ $pnlRecords->lastPage() }}</a>
+                    </li>
+                @endif
 
-                    @for ($page = $start; $page <= $end; $page++)
-                        @if ($page == $pnlRecords->currentPage())
-                            <li class="page-item active" aria-current="page">
-                                <span class="page-link">{{ $page }}</span>
-                            </li>
-                        @else
-                            <li class="page-item">
-                                <a class="page-link" href="{{ $pnlRecords->url($page) }}">{{ $page }}</a>
-                            </li>
-                        @endif
-                    @endfor
-
-                    @if ($end < $pnlRecords->lastPage())
-                        @if ($end < $pnlRecords->lastPage() - 1)
-                            <li class="page-item disabled"><span class="page-link">...</span></li>
-                        @endif
-                        <li class="page-item">
-                            <a class="page-link" href="{{ $pnlRecords->url($pnlRecords->lastPage()) }}">{{ $pnlRecords->lastPage() }}</a>
-                        </li>
-                    @endif
-
-                    {{-- Next Page Link --}}
-                    @if ($pnlRecords->hasMorePages())
-                        <li class="page-item">
-                            <a class="page-link" href="{{ $pnlRecords->nextPageUrl() }}" rel="next">
-                                Next <i class="fas fa-chevron-right"></i>
-                            </a>
-                        </li>
-                    @else
-                        <li class="page-item disabled">
-                            <span class="page-link">
-                                Next <i class="fas fa-chevron-right"></i>
-                            </span>
-                        </li>
-                    @endif
-                </ul>
-            </nav>
+                {{-- Next Page Link --}}
+                @if ($pnlRecords->hasMorePages())
+                    <li class="page-item">
+                        <a class="page-link" href="{{ $pnlRecords->nextPageUrl() }}" rel="next">Next &raquo;</a>
+                    </li>
+                @else
+                    <li class="page-item disabled" aria-disabled="true">
+                        <span class="page-link">Next &raquo;</span>
+                    </li>
+                @endif
+            </ul>
+        </nav>
+    @endif
+</div>
         @endif
     </div>
 </div>
-            </div>
-        </div>
-    </div>
 
-    <!-- Items Modal -->
-    <div class="modal fade" id="itemsModal" tabindex="-1">
-        <div class="modal-dialog modal-lg">
-            <div class="modal-content">
-                <div class="modal-header bg-info text-white">
-                    <h5 class="modal-title"><i class="fas fa-list-ul me-2"></i>PnL Line Items</h5>
-                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-                </div>
-                <div class="modal-body" id="itemsModalBody">
-                    <div class="text-center py-5">
-                        <div class="spinner-border"></div>
-                    </div>
-                </div>
+<!-- Email Modal -->
+<div class="modal fade" id="pnlEmailModal" tabindex="-1">
+    <div class="modal-dialog modal-xl modal-dialog-centered modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">
+                    <i class="fas fa-envelope me-2"></i>Email Details
+                </h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
-        </div>
-    </div>
-
-    <!-- Email Modal -->
-    <div class="modal fade" id="pnlEmailModal" tabindex="-1">
-        <div class="modal-dialog modal-xl modal-dialog-centered modal-dialog-scrollable">
-            <div class="modal-content">
-                <div class="modal-header bg-info text-white">
-                    <h5 class="modal-title"><i class="fas fa-envelope me-2"></i>Email Details</h5>
-                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
-                </div>
-                <div class="modal-body p-0" id="pnlModalBody">
-                    <div class="text-center py-5">
-                        <div class="spinner-border text-info"></div>
-                    </div>
-                </div>
-                <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+            <div class="modal-body p-0" id="pnlModalBody">
+                <div class="text-center py-5">
+                    <div class="spinner-border text-primary"></div>
                 </div>
             </div>
         </div>
     </div>
+</div>
 
-    <style>
-        .pnl-row {
-            cursor: pointer;
-            transition: background-color 0.2s;
-        }
+<style>
+/* PnL Page Styles */
+.pnl-container {
+    max-width: 1400px;
+    margin: 0 auto;
+}
 
-        .pnl-row:hover {
-            background-color: rgba(13, 148, 136, 0.1);
-        }
+/* Header Styles */
+.pnl-header {
+    background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
+    border-radius: 20px;
+    padding: 1.75rem 2rem;
+    color: white;
+}
 
-        .email-content {
-            max-height: 70vh;
-            overflow-y: auto;
-            padding: 20px;
-        }
+.pnl-title {
+    font-size: 1.75rem;
+    font-weight: 700;
+    margin: 0 0 0.25rem 0;
+}
 
-        .email-content table {
-            border-collapse: collapse;
-            width: 100%;
-        }
+.pnl-subtitle {
+    font-size: 0.85rem;
+    opacity: 0.8;
+    margin: 0;
+}
 
-        .email-content table td,
-        .email-content table th {
-            border: 1px solid #ddd;
-            padding: 8px;
-        }
+/* Button Styles */
+.btn-pnl {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.6rem 1.25rem;
+    font-size: 0.8rem;
+    font-weight: 500;
+    border-radius: 12px;
+    text-decoration: none;
+    transition: all 0.2s ease;
+    border: none;
+    cursor: pointer;
+}
 
-        /* Fix for button inside clickable row */
-        .pnl-row .btn,
-        .pnl-row select,
-        .pnl-row form {
-            position: relative;
-            z-index: 10;
-        }
-        /* Pagination Styles */
+.btn-pnl-primary {
+    background-color: #0d9488;
+    color: white;
+}
+
+.btn-pnl-primary:hover {
+    background-color: #0f766e;
+    transform: translateY(-1px);
+    color: white;
+}
+
+.btn-pnl-success {
+    background-color: #10b981;
+    color: white;
+}
+
+.btn-pnl-success:hover {
+    background-color: #059669;
+    transform: translateY(-1px);
+    color: white;
+}
+
+.btn-pnl-secondary {
+    background-color: #64748b;
+    color: white;
+}
+
+.btn-pnl-secondary:hover {
+    background-color: #475569;
+    color: white;
+}
+
+/* Stat Cards */
+.stat-card {
+    background: white;
+    border-radius: 20px;
+    padding: 1.25rem;
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    transition: all 0.2s ease;
+    border: 1px solid #e2e8f0;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+}
+
+.stat-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 25px rgba(0,0,0,0.1);
+}
+
+.stat-card-icon {
+    width: 55px;
+    height: 55px;
+    border-radius: 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.5rem;
+}
+
+.stat-card-primary .stat-card-icon {
+    background: linear-gradient(135deg, #0d9488 0%, #0f766e 100%);
+    color: white;
+}
+
+.stat-card-success .stat-card-icon {
+    background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+    color: white;
+}
+
+.stat-card-warning .stat-card-icon {
+    background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+    color: white;
+}
+
+.stat-card-info .stat-card-icon {
+    background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
+    color: white;
+}
+
+.stat-card-content {
+    flex: 1;
+}
+
+.stat-card-label {
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: #64748b;
+    display: block;
+    margin-bottom: 0.25rem;
+}
+
+.stat-card-value {
+    font-size: 1.75rem;
+    font-weight: 700;
+    color: #1e293b;
+    margin: 0;
+}
+
+/* Filter Card */
+.filter-card {
+    background: white;
+    border-radius: 20px;
+    border: 1px solid #e2e8f0;
+    overflow: hidden;
+}
+
+.filter-card-header {
+    padding: 1rem 1.5rem;
+    background: #f8fafc;
+    border-bottom: 1px solid #e2e8f0;
+    font-weight: 600;
+    font-size: 0.85rem;
+    color: #1e293b;
+}
+
+.filter-card-body {
+    padding: 1.5rem;
+}
+
+.filter-label {
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: #64748b;
+    display: block;
+    margin-bottom: 0.4rem;
+}
+
+.form-control-pnl, .form-select-pnl {
+    border: 1px solid #e2e8f0;
+    border-radius: 10px;
+    padding: 0.5rem 0.75rem;
+    font-size: 0.8rem;
+    transition: all 0.2s ease;
+}
+
+.form-control-pnl:focus, .form-select-pnl:focus {
+    border-color: #0d9488;
+    box-shadow: 0 0 0 3px rgba(13, 148, 136, 0.1);
+}
+
+.input-group-text {
+    background-color: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-right: none;
+    color: #64748b;
+}
+
+/* Table Card */
+.table-card {
+    background: white;
+    border-radius: 20px;
+    border: 1px solid #e2e8f0;
+    overflow: hidden;
+}
+
+.pnl-table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+.pnl-table thead th {
+    padding: 1rem 1rem;
+    background: #f8fafc;
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: #64748b;
+    border-bottom: 1px solid #e2e8f0;
+}
+
+.pnl-table tbody td {
+    padding: 1rem 1rem;
+    font-size: 0.8rem;
+    color: #1e293b;
+    border-bottom: 1px solid #f1f5f9;
+    vertical-align: middle;
+}
+
+.pnl-row {
+    cursor: pointer;
+    transition: background-color 0.2s ease;
+}
+
+.pnl-row:hover {
+    background-color: #f8fafc;
+}
+
+/* Badge Styles */
+.date-badge {
+    font-weight: 600;
+    display: block;
+}
+
+.time-text {
+    font-size: 0.65rem;
+    color: #64748b;
+}
+
+.vendor-info {
+    display: flex;
+    flex-direction: column;
+}
+
+.vendor-info strong {
+    font-size: 0.8rem;
+}
+
+.vendor-info small {
+    font-size: 0.65rem;
+    color: #64748b;
+}
+
+.country-badge {
+    display: inline-block;
+    padding: 0.15rem 0.4rem;
+    background: #e2e8f0;
+    border-radius: 4px;
+    font-size: 0.6rem;
+    font-weight: 600;
+    margin-top: 0.2rem;
+}
+
+.subject-text {
+    max-width: 200px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.is-number, .invoice-number {
+    background: #f1f5f9;
+    padding: 0.2rem 0.4rem;
+    border-radius: 6px;
+    font-size: 0.7rem;
+    font-weight: 500;
+}
+
+.badge-category {
+    display: inline-block;
+    padding: 0.25rem 0.6rem;
+    border-radius: 20px;
+    font-size: 0.65rem;
+    font-weight: 500;
+}
+
+.badge-default {
+    background: #e0f2fe;
+    color: #0369a1;
+}
+
+.badge-multi {
+    background: #fef3c7;
+    color: #92400e;
+}
+
+.badge-other {
+    background: #f1f5f9;
+    color: #475569;
+}
+
+.amount-value {
+    font-weight: 700;
+    color: #1e293b;
+}
+
+.status-badge {
+    display: inline-block;
+    padding: 0.25rem 0.6rem;
+    border-radius: 20px;
+    font-size: 0.65rem;
+    font-weight: 500;
+}
+
+.status-unread {
+    background: #fee2e2;
+    color: #991b1b;
+}
+
+.status-read {
+    background: #d1fae5;
+    color: #065f46;
+}
+
+/* Action Buttons */
+.action-buttons {
+    display: flex;
+    gap: 0.5rem;
+}
+
+.action-btn {
+    width: 32px;
+    height: 32px;
+    border-radius: 10px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    text-decoration: none;
+    transition: all 0.2s ease;
+    border: none;
+    cursor: pointer;
+}
+
+.action-btn-warning {
+    background: #fef3c7;
+    color: #d97706;
+}
+
+.action-btn-warning:hover {
+    background: #f59e0b;
+    color: white;
+}
+
+.action-btn-info {
+    background: #e0f2fe;
+    color: #0284c7;
+}
+
+.action-btn-info:hover {
+    background: #0ea5e9;
+    color: white;
+}
+
+/* Empty State */
+.empty-state {
+    text-align: center;
+    padding: 3rem !important;
+    color: #64748b;
+}
+
+.empty-state p {
+    margin: 0;
+}
+
+/* Pagination */
 .pagination-wrapper {
-    margin-top: 0;
+    padding: 1.25rem 1.5rem;
+    border-top: 1px solid #e2e8f0;
+}
+
+/* Modal Styles */
+.modal-header {
+    background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
+    color: white;
+    border: none;
+}
+
+.modal-header .btn-close {
+    filter: brightness(0) invert(1);
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+    .pnl-header {
+        padding: 1.25rem;
+    }
+    
+    .pnl-title {
+        font-size: 1.25rem;
+    }
+    
+    .stat-card-value {
+        font-size: 1.25rem;
+    }
+    
+    .stat-card-icon {
+        width: 45px;
+        height: 45px;
+        font-size: 1.25rem;
+    }
+    
+    .pnl-table thead {
+        display: none;
+    }
+    
+    .pnl-table tbody tr {
+        display: block;
+        margin-bottom: 1rem;
+        border: 1px solid #e2e8f0;
+        border-radius: 12px;
+        padding: 0.75rem;
+    }
+    
+    .pnl-table tbody td {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 0.5rem;
+        border: none;
+    }
+    
+    .pnl-table tbody td:before {
+        content: attr(data-label);
+        font-weight: 600;
+        font-size: 0.7rem;
+        color: #64748b;
+        margin-right: 1rem;
+    }
+    
+    .action-buttons {
+        justify-content: flex-end;
+    }
+}
+/* Pagination Styles - Override Bootstrap properly */
+.pagination-wrapper {
+    padding: 1.25rem 1.5rem;
+    border-top: 1px solid #e2e8f0;
+    display: flex;
+    justify-content: center;
 }
 
 .pagination {
     display: flex;
-    padding-left: 0;
-    list-style: none;
-    border-radius: 0.375rem;
     gap: 5px;
-    flex-wrap: wrap;
-    margin-bottom: 0;
+    margin: 0;
+    padding: 0;
+    list-style: none;
 }
 
 .pagination .page-item {
+    display: inline-block;
     margin: 0;
 }
 
-.pagination .page-item .page-link {
-    position: relative;
-    display: block;
-    padding: 0.5rem 0.85rem;
-    font-size: 0.875rem;
-    line-height: 1.25;
-    color: #0d6efd;
-    background-color: #fff;
-    border: 1px solid #dee2e6;
-    border-radius: 0.375rem;
+.pagination .page-link {
+    padding: 0.5rem 1rem;
+    font-size: 0.8rem;
+    font-weight: 500;
+    color: #1e293b;
+    background-color: white;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
     text-decoration: none;
     transition: all 0.2s ease;
 }
 
-.pagination .page-item .page-link:hover {
-    z-index: 2;
-    color: #0a58ca;
-    background-color: #e9ecef;
-    border-color: #dee2e6;
+.pagination .page-link:hover {
+    background-color: #f1f5f9;
+    border-color: #0d9488;
+    color: #0d9488;
 }
 
 .pagination .page-item.active .page-link {
-    z-index: 3;
-    color: #fff;
-    background-color: #0d6efd;
-    border-color: #0d6efd;
+    background-color: #0d9488;
+    border-color: #0d9488;
+    color: white;
 }
 
 .pagination .page-item.disabled .page-link {
-    color: #6c757d;
+    color: #94a3b8;
     pointer-events: none;
-    cursor: auto;
-    background-color: #fff;
-    border-color: #dee2e6;
-}
-
-.pagination .page-item:first-child .page-link {
-    border-top-left-radius: 0.375rem;
-    border-bottom-left-radius: 0.375rem;
-}
-
-.pagination .page-item:last-child .page-link {
-    border-top-right-radius: 0.375rem;
-    border-bottom-right-radius: 0.375rem;
-}
-
-/* Previous/Next buttons icons */
-.pagination .page-link i {
-    font-size: 0.75rem;
+    background-color: #f8fafc;
+    border-color: #e2e8f0;
 }
 
 /* Responsive pagination */
 @media (max-width: 768px) {
-    .pagination .page-item .page-link {
-        padding: 0.375rem 0.6rem;
-        font-size: 0.75rem;
+    .pagination .page-link {
+        padding: 0.35rem 0.7rem;
+        font-size: 0.7rem;
     }
     
-    .pagination .page-link .fa-chevron-left,
-    .pagination .page-link .fa-chevron-right {
-        display: none;
+    .pagination {
+        gap: 3px;
     }
 }
-    </style>
 
-    @push('scripts')
-        <script>
-            // Add this to your existing script section
-            $('.update-pnl-btn').on('click', function(e) {
-                e.stopPropagation();
-                const id = $(this).data('id');
-                const btn = $(this);
+/* Small pagination text */
+.pagination .page-item:first-child .page-link,
+.pagination .page-item:last-child .page-link {
+    font-weight: 600;
+}
+</style>
 
-                if (!confirm('This will parse the email and update the PnL Excel file. Continue?')) {
-                    return;
+@push('scripts')
+<script>
+$(document).ready(function() {
+    // Row click to view email
+    $('.pnl-row').on('click', function(e) {
+        if ($(e.target).closest('.action-btn').length) return;
+        
+        const id = $(this).data('id');
+        const modal = new bootstrap.Modal(document.getElementById('pnlEmailModal'));
+        const modalBody = document.getElementById('pnlModalBody');
+        
+        modalBody.innerHTML = '<div class="text-center py-5"><div class="spinner-border text-primary"></div><p class="mt-2">Loading...</p></div>';
+        modal.show();
+        
+        $.ajax({
+            url: '/pnl/view-email/' + id,
+            method: 'GET',
+            success: function(data) {
+                if (data.success) {
+                    let content = data.email.body_html || data.email.body || '<p>No content</p>';
+                    modalBody.innerHTML = '<div class="email-content p-4">' + content + '</div>';
                 }
-
-                btn.prop('disabled', true).html('<i class="fas fa-spinner fa-spin"></i> Processing...');
-
-                $.ajax({
-                    url: '{{ route('pnl.update-excel') }}',
-                    method: 'POST',
-                    data: {
-                        id: id,
-                        _token: '{{ csrf_token() }}'
-                    },
-                    dataType: 'json',
-                    success: function(response) {
-                        if (response.success) {
-                            toastr.success(response.message || 'PnL updated successfully!');
-                            // Reload the items modal if open
-                            if ($('#itemsModal').hasClass('show')) {
-                                $('.view-items-btn[data-id="' + id + '"]').click();
-                            }
-                        } else {
-                            toastr.error(response.message || 'Failed to update PnL');
-                        }
-                    },
-                    error: function(xhr) {
-                        let errorMsg = 'Error processing PnL';
-                        if (xhr.responseJSON && xhr.responseJSON.message) {
-                            errorMsg = xhr.responseJSON.message;
-                        }
-                        toastr.error(errorMsg);
-                    },
-                    complete: function() {
-                        btn.prop('disabled', false).html('<i class="fas fa-file-excel"></i> Update PnL');
-                    }
-                });
-            });
-            // Wait for jQuery to be ready
-            $(document).ready(function() {
-                const csrfToken = $('meta[name="csrf-token"]').attr('content');
-
-                // Make entire row clickable to view email - Using jQuery for better compatibility
-                $('.pnl-row').on('click', function(e) {
-                    // Don't trigger if clicking on buttons or selects
-                    if ($(e.target).is('button') || $(e.target).is('select') || $(e.target).closest('button')
-                        .length || $(e.target).closest('select').length) {
-                        return;
-                    }
-
-                    const id = $(this).data('id');
-                    if (!id) return;
-
-                    console.log('Row clicked, ID:', id);
-
-                    // Show modal
-                    const modal = new bootstrap.Modal(document.getElementById('pnlEmailModal'));
-                    const modalBody = document.getElementById('pnlModalBody');
-
-                    modalBody.innerHTML =
-                        '<div class="text-center py-5"><div class="spinner-border text-info"></div><p class="mt-2">Loading email content...</p></div>';
-                    modal.show();
-
-                    // Fetch email content
-                    $.ajax({
-                        url: '/pnl/view-email/' + id,
-                        method: 'GET',
-                        dataType: 'json',
-                        success: function(data) {
-                            if (data.success) {
-                                let emailContent = data.email.body_html || data.email.body ||
-                                    '<p class="text-muted">No content available</p>';
-
-                                // Remove everything after "Thanks" or signature
-                                emailContent = emailContent.replace(/Thanks[^<]*<br\s*\/?>.*$/is,
-                                    '');
-                                emailContent = emailContent.replace(
-                                    /Warm Regards[^<]*<br\s*\/?>.*$/is, '');
-                                emailContent = emailContent.replace(
-                                    /Best Regards[^<]*<br\s*\/?>.*$/is, '');
-                                emailContent = emailContent.replace(/Company Logo.*$/is, '');
-                                emailContent = emailContent.replace(
-                                    /Website \| LinkedIn \| Facebook \| Instagram.*$/is, '');
-                                emailContent = emailContent.replace(/Countries of Operation[^<]*$/i,
-                                    '');
-
-                                modalBody.innerHTML = '<div class="email-content">' + emailContent +
-                                    '</div>';
-                            }
-                        },
-                        error: function(xhr, status, error) {
-                            console.error('AJAX Error:', error);
-                            console.error('Response:', xhr.responseText);
-                            modalBody.innerHTML =
-                                '<div class="alert alert-danger m-3">Error loading email: ' +
-                                error + '</div>';
-                        }
-                    });
-                });
-
-                // View Items button
-                $('.view-items-btn').on('click', function(e) {
-                    e.stopPropagation();
-                    const id = $(this).data('id');
-                    const modalBody = document.getElementById('itemsModalBody');
-                    modalBody.innerHTML =
-                        '<div class="text-center py-5"><div class="spinner-border"></div><p class="mt-2">Loading items...</p></div>';
-
-                    $.ajax({
-                        url: '/pnl/items/' + id,
-                        method: 'GET',
-                        dataType: 'json',
-                        success: function(data) {
-                            if (data.success && data.items && data.items.length) {
-                                let html =
-                                    '<div class="table-responsive"><table class="table table-sm"><thead><tr><th>Type</th><th>Name/Description</th><th class="text-end">Amount</th><th>Currency</th></tr></thead><tbody>';
-                                $.each(data.items, function(index, item) {
-                                    const itemName = item.hotel_name || item
-                                        .transport_name || item.service_name || '-';
-                                    html += '<tr>' +
-                                        '<td><span class="badge bg-secondary">' + item
-                                        .type + '</span></td>' +
-                                        '<td>' + itemName + '</td>' +
-                                        '<td class="text-end fw-bold">' + parseFloat(item
-                                            .amount_original).toLocaleString() + '</td>' +
-                                        '<td>' + item.currency + '</td>' +
-                                        '</tr>';
-                                });
-                                html += '</tbody></table></div>';
-                                modalBody.innerHTML = html;
-                            } else {
-                                modalBody.innerHTML =
-                                    '<div class="alert alert-info m-3">No line items found for this record.</div>';
-                            }
-                        },
-                        error: function() {
-                            modalBody.innerHTML =
-                                '<div class="alert alert-danger m-3">Error loading items. Please try again.</div>';
-                        }
-                    });
-                });
-            });
-        </script>
-    @endpush
+            },
+            error: function() {
+                modalBody.innerHTML = '<div class="alert alert-danger m-3">Error loading email</div>';
+            }
+        });
+    });
+    
+    // Update PnL button
+    $('.update-pnl-btn').on('click', function(e) {
+        e.stopPropagation();
+        const id = $(this).data('id');
+        const btn = $(this);
+        
+        if (!confirm('Process this email and update PnL Excel?')) return;
+        
+        btn.html('<i class="fas fa-spinner fa-spin"></i>').prop('disabled', true);
+        
+        $.ajax({
+            url: '{{ route("pnl.update-excel") }}',
+            method: 'POST',
+            data: { id: id, _token: '{{ csrf_token() }}' },
+            success: function(response) {
+                toastr.success(response.message || 'PnL updated successfully!');
+            },
+            error: function(xhr) {
+                toastr.error(xhr.responseJSON?.message || 'Update failed');
+            },
+            complete: function() {
+                btn.html('<i class="fas fa-file-excel"></i>').prop('disabled', false);
+            }
+        });
+    });
+});
+</script>
+@endpush
 @endsection

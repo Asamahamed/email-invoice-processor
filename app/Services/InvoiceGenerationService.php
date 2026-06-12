@@ -138,69 +138,80 @@ class InvoiceGenerationService
     /**
      * Generate invoice number with revision suffix (e.g., IS43595R1, IS43595R2, IS43595R3)
      */
-    protected function getInvoiceNumberWithRevision($baseNumber, $revisionNumber = null)
-    {
-        if (!$baseNumber) {
-            $baseNumber = 'INV' . date('Ymd') . rand(1000, 9999);
-        }
-        
-        // Remove any existing revision suffix (e.g., IS43595R1 -> IS43595)
-        $cleanBase = preg_replace('/R\d+$/i', '', $baseNumber);
-        
-        if ($revisionNumber !== null && $revisionNumber > 0) {
-            return $cleanBase . 'R' . $revisionNumber;
-        }
-        
-        // Check if this base number already has invoices
-        $existingRevisions = GeneratedInvoice::where('original_invoice_number', $cleanBase)
-            ->orWhere('invoice_number', 'LIKE', $cleanBase . 'R%')
-            ->count();
-        
-        if ($existingRevisions > 0) {
-            $newRevisionNumber = $existingRevisions + 1;
-            return $cleanBase . 'R' . $newRevisionNumber;
-        }
-        
-        return $cleanBase;
+    /**
+ * Generate invoice number with revision suffix (e.g., IS43595R1, IS43595R2, IS43595R3)
+ * Now handles spaces in original invoice number
+ */
+protected function getInvoiceNumberWithRevision($baseNumber, $revisionNumber = null)
+{
+    if (!$baseNumber) {
+        $baseNumber = 'INV' . date('Ymd') . rand(1000, 9999);
     }
+    
+    // REMOVE ANY SPACES FIRST!
+    $baseNumber = str_replace(' ', '', $baseNumber);
+    
+    // Remove any existing revision suffix (e.g., IS43595R1 -> IS43595)
+    $cleanBase = preg_replace('/R\d+$/i', '', $baseNumber);
+    
+    if ($revisionNumber !== null && $revisionNumber > 0) {
+        return $cleanBase . 'R' . $revisionNumber;
+    }
+    
+    // Check if this base number already has invoices
+    $existingRevisions = GeneratedInvoice::where('original_invoice_number', $cleanBase)
+        ->orWhere('invoice_number', 'LIKE', $cleanBase . 'R%')
+        ->count();
+    
+    if ($existingRevisions > 0) {
+        $newRevisionNumber = $existingRevisions + 1;
+        return $cleanBase . 'R' . $newRevisionNumber;
+    }
+    
+    return $cleanBase;
+}
     
     /**
      * Get settlement date based on invoice type
      */
-    protected function getSettlementDate($travelStartDate, $isUSD = true)
-    {
-        if ($isUSD) {
-            return date('d/m/Y');
-        } else {
-            if ($travelStartDate) {
-                try {
-                    $travelDate = null;
-                    if (strpos($travelStartDate, '-') !== false) {
-                        $travelDate = new \DateTime($travelStartDate);
-                    } elseif (strpos($travelStartDate, '/') !== false) {
-                        $travelDate = \DateTime::createFromFormat('d/m/Y', $travelStartDate);
-                        if (!$travelDate) {
-                            $travelDate = \DateTime::createFromFormat('m/d/Y', $travelStartDate);
-                        }
-                    }
-                    
-                    if ($travelDate) {
-                        $settlementDate = clone $travelDate;
-                        $settlementDate->modify('-15 days');
-                        
-                        $today = new \DateTime();
-                        if ($settlementDate < $today) {
-                            return $today->format('d/m/Y');
-                        }
-                        return $settlementDate->format('d/m/Y');
-                    }
-                } catch (\Exception $e) {
-                    Log::error("Date parsing error in getSettlementDate: " . $e->getMessage());
-                }
-            }
-            return date('d/m/Y');
-        }
+   protected function getSettlementDate($travelStartDate, $isUSD = true)
+{
+    $daysBeforeTravel = $isUSD ? 10 : 15;
+    
+    if (!$travelStartDate) {
+        $defaultDate = new \DateTime();
+        $defaultDate->modify('+' . $daysBeforeTravel . ' days');
+        return $defaultDate->format('d/m/Y');
     }
+    
+    try {
+        $travelDate = null;
+        if (strpos($travelStartDate, '-') !== false) {
+            $travelDate = new \DateTime($travelStartDate);
+        } elseif (strpos($travelStartDate, '/') !== false) {
+            $travelDate = \DateTime::createFromFormat('d/m/Y', $travelStartDate);
+            if (!$travelDate) {
+                $travelDate = \DateTime::createFromFormat('m/d/Y', $travelStartDate);
+            }
+        }
+        
+        if ($travelDate) {
+            $settlementDate = clone $travelDate;
+            $settlementDate->modify('-' . $daysBeforeTravel . ' days');
+            
+            $today = new \DateTime();
+            // Only replace with today if settlement date is more than 30 days past? Or never?
+            // Option: Never replace, always use calculated date
+            return $settlementDate->format('d/m/Y');
+        }
+    } catch (\Exception $e) {
+        Log::error("Date parsing error: " . $e->getMessage());
+    }
+    
+    $fallbackDate = new \DateTime();
+    $fallbackDate->modify('+' . $daysBeforeTravel . ' days');
+    return $fallbackDate->format('d/m/Y');
+}
     
     /**
      * Get formatted travel dates for remark
@@ -507,8 +518,8 @@ class InvoiceGenerationService
         $travelDates = $this->getTravelDates($email);
         $settlementDate = $this->getSettlementDate($email->travel_start_date, false);
         
-        $salesId = $email->file_handler ?? 'Shahinsha';
-        $fileHandler = $email->file_handler ?? 'AKASH KUMAR';
+        $salesId = $email->sales_id ?? 'NA';
+        $fileHandler = $email->file_handler ?? 'NA';
         
         $totalGuests = $calculations['total_guests'] ?? 1;
         $exchangeRate = $calculations['exchange_rate'];

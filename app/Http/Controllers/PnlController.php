@@ -262,6 +262,7 @@ public function viewExcel($country)
         
         $countryName = $countryNames[$country] ?? $country;
         
+        
         return view('pnl.excel-preview', compact('html', 'countryName', 'country'));
         
     } catch (\Exception $e) {
