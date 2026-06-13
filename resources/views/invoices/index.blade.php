@@ -204,8 +204,8 @@
                                         <div class="fw-semibold">{{ $email->from_name ?: '-' }}</div>
                                         <small class="text-muted">{{ $email->from_email }}</small>
                                     </td>
-                                    <td class="text-truncate" style="max-width: 250px;">
-                                        <div class="fw-semibold">{{ Str::limit($email->subject ?: '-', 60) }}</div>
+                                    <td class="subject-cell">
+                                        <div class="fw-semibold subject-text">{{ $email->subject ?: '-' }}</div>
                                         @if ($email->is_tour_confirmation)
                                             <span class="badge-credit mt-1 d-inline-block">Confirmation</span>
                                         @endif
@@ -392,6 +392,49 @@
             background-color: white;
             border-bottom: 2px solid var(--accent);
         }
+
+        /* Subject column - Full visibility with wrap */
+        .subject-cell {
+            max-width: 350px;
+            min-width: 250px;
+        }
+
+        .subject-text {
+            white-space: normal;
+            word-wrap: break-word;
+            word-break: break-word;
+            line-height: 1.4;
+            font-size: 0.8rem;
+        }
+
+        /* Responsive - on mobile */
+        @media (max-width: 768px) {
+            .subject-cell {
+                max-width: 200px;
+                min-width: 150px;
+            }
+        }
+
+        /* For very long subjects */
+        .subject-text {
+            display: -webkit-box;
+            -webkit-line-clamp: 3;
+            /* Max 3 lines, then ellipsis */
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        /* Optional: Show full subject on hover */
+        .subject-text:hover {
+            -webkit-line-clamp: unset;
+            background-color: #f8f9fa;
+            position: relative;
+            z-index: 10;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+            padding: 4px;
+            border-radius: 4px;
+        }
     </style>
 
     @push('scripts')
@@ -407,7 +450,7 @@
                     $('#emailModal').modal('show');
                     $('#modalBody').html(
                         '<div class="text-center py-5"><div class="spinner-border text-primary" role="status"><span class="visually-hidden">Loading...</span></div></div>'
-                        );
+                    );
 
                     $.ajax({
                         url: '{{ route('email.view') }}',
@@ -439,7 +482,7 @@
                         error: function() {
                             $('#modalBody').html(
                                 '<div class="alert alert-danger m-3">Failed to load email content</div>'
-                                );
+                            );
                         }
                     });
                 });
@@ -488,102 +531,108 @@
         </script>
 
         <script>
-function generateAndViewInvoice(button) {
-    const emailId = $(button).data('email-id');
-    const originalHtml = $(button).html();
-    const $button = $(button);
-    
-    $button.prop('disabled', true).html('<i class="fas fa-spinner fa-spin"></i> Generating...');
+            function generateAndViewInvoice(button) {
+                const emailId = $(button).data('email-id');
+                const originalHtml = $(button).html();
+                const $button = $(button);
 
-    $.ajax({
-        url: '{{ route('generate.and.view.invoice') }}',
-        method: 'POST',
-        data: {
-            email_id: emailId,
-            _token: '{{ csrf_token() }}'
-        },
-        dataType: 'json',
-        success: function(response) {
-            console.log('Success response:', response);
-            if (response.success) {
-                window.open('{{ url('/invoice/view') }}/' + response.invoice_id, '_blank');
-                toastr.success(response.message || 'Invoice generated successfully!');
-                setTimeout(() => location.reload(), 1500);
-            } else {
-                // Show error message properly
-                const errorMsg = response.message || 'Failed to generate invoice';
-                console.error('Error:', errorMsg);
-                toastr.error(errorMsg, 'Error', { timeOut: 5000 });
-                $button.prop('disabled', false).html(originalHtml);
+                $button.prop('disabled', true).html('<i class="fas fa-spinner fa-spin"></i> Generating...');
+
+                $.ajax({
+                    url: '{{ route('generate.and.view.invoice') }}',
+                    method: 'POST',
+                    data: {
+                        email_id: emailId,
+                        _token: '{{ csrf_token() }}'
+                    },
+                    dataType: 'json',
+                    success: function(response) {
+                        console.log('Success response:', response);
+                        if (response.success) {
+                            window.open('{{ url('/invoice/view') }}/' + response.invoice_id, '_blank');
+                            toastr.success(response.message || 'Invoice generated successfully!');
+                            setTimeout(() => location.reload(), 1500);
+                        } else {
+                            // Show error message properly
+                            const errorMsg = response.message || 'Failed to generate invoice';
+                            console.error('Error:', errorMsg);
+                            toastr.error(errorMsg, 'Error', {
+                                timeOut: 5000
+                            });
+                            $button.prop('disabled', false).html(originalHtml);
+                        }
+                    },
+                    error: function(xhr) {
+                        console.error('AJAX Error:', xhr);
+                        let errorMsg = 'Error generating invoice';
+                        if (xhr.responseJSON && xhr.responseJSON.message) {
+                            errorMsg = xhr.responseJSON.message;
+                        } else if (xhr.responseText) {
+                            try {
+                                const jsonResponse = JSON.parse(xhr.responseText);
+                                errorMsg = jsonResponse.message || errorMsg;
+                            } catch (e) {}
+                        }
+                        toastr.error(errorMsg, 'Error', {
+                            timeOut: 5000
+                        });
+                        $button.prop('disabled', false).html(originalHtml);
+                    }
+                });
             }
-        },
-        error: function(xhr) {
-            console.error('AJAX Error:', xhr);
-            let errorMsg = 'Error generating invoice';
-            if (xhr.responseJSON && xhr.responseJSON.message) {
-                errorMsg = xhr.responseJSON.message;
-            } else if (xhr.responseText) {
-                try {
-                    const jsonResponse = JSON.parse(xhr.responseText);
-                    errorMsg = jsonResponse.message || errorMsg;
-                } catch(e) {}
+
+            function regenerateInvoice(button) {
+                const emailId = $(button).data('email-id');
+                const originalHtml = $(button).html();
+                const $button = $(button);
+
+                if (!confirm('⚠️ This will update the existing invoice with latest email data. Continue?')) {
+                    return;
+                }
+
+                $button.prop('disabled', true).html('<i class="fas fa-spinner fa-spin"></i> Regenerating...');
+
+                $.ajax({
+                    url: '{{ route('regenerate.invoice') }}',
+                    method: 'POST',
+                    data: {
+                        email_id: emailId,
+                        _token: '{{ csrf_token() }}'
+                    },
+                    dataType: 'json',
+                    success: function(response) {
+                        console.log('Regenerate response:', response);
+                        if (response.success) {
+                            window.open('{{ url('/invoice/view') }}/' + response.invoice_id, '_blank');
+                            toastr.success(response.message || 'Invoice regenerated successfully!');
+                            setTimeout(() => location.reload(), 2000);
+                        } else {
+                            const errorMsg = response.message || 'Failed to regenerate invoice';
+                            console.error('Error:', errorMsg);
+                            toastr.error(errorMsg, 'Error', {
+                                timeOut: 5000
+                            });
+                            $button.prop('disabled', false).html(originalHtml);
+                        }
+                    },
+                    error: function(xhr) {
+                        console.error('AJAX Error:', xhr);
+                        let errorMsg = 'Error regenerating invoice';
+                        if (xhr.responseJSON && xhr.responseJSON.message) {
+                            errorMsg = xhr.responseJSON.message;
+                        } else if (xhr.responseText) {
+                            try {
+                                const jsonResponse = JSON.parse(xhr.responseText);
+                                errorMsg = jsonResponse.message || errorMsg;
+                            } catch (e) {}
+                        }
+                        toastr.error(errorMsg, 'Error', {
+                            timeOut: 5000
+                        });
+                        $button.prop('disabled', false).html(originalHtml);
+                    }
+                });
             }
-            toastr.error(errorMsg, 'Error', { timeOut: 5000 });
-            $button.prop('disabled', false).html(originalHtml);
-        }
-    });
-}
-
-function regenerateInvoice(button) {
-    const emailId = $(button).data('email-id');
-    const originalHtml = $(button).html();
-    const $button = $(button);
-
-    if (!confirm('⚠️ This will update the existing invoice with latest email data. Continue?')) {
-        return;
-    }
-
-    $button.prop('disabled', true).html('<i class="fas fa-spinner fa-spin"></i> Regenerating...');
-
-    $.ajax({
-        url: '{{ route('regenerate.invoice') }}',
-        method: 'POST',
-        data: {
-            email_id: emailId,
-            _token: '{{ csrf_token() }}'
-        },
-        dataType: 'json',
-        success: function(response) {
-            console.log('Regenerate response:', response);
-            if (response.success) {
-                window.open('{{ url('/invoice/view') }}/' + response.invoice_id, '_blank');
-                toastr.success(response.message || 'Invoice regenerated successfully!');
-                setTimeout(() => location.reload(), 2000);
-            } else {
-                const errorMsg = response.message || 'Failed to regenerate invoice';
-                console.error('Error:', errorMsg);
-                toastr.error(errorMsg, 'Error', { timeOut: 5000 });
-                $button.prop('disabled', false).html(originalHtml);
-            }
-        },
-        error: function(xhr) {
-            console.error('AJAX Error:', xhr);
-            let errorMsg = 'Error regenerating invoice';
-            if (xhr.responseJSON && xhr.responseJSON.message) {
-                errorMsg = xhr.responseJSON.message;
-            } else if (xhr.responseText) {
-                try {
-                    const jsonResponse = JSON.parse(xhr.responseText);
-                    errorMsg = jsonResponse.message || errorMsg;
-                } catch(e) {}
-            }
-            toastr.error(errorMsg, 'Error', { timeOut: 5000 });
-            $button.prop('disabled', false).html(originalHtml);
-        }
-    });
-}
-
-
         </script>
     @endpush
 @endsection

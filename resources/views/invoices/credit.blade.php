@@ -33,13 +33,13 @@
                         <div class="col-md-4 mb-3">
                             <div class="stat-card">
                                 <div class="stat-title">Total Invoices</div>
-                                <h3 class="stat-value">{{ $invoices->count() }}</h3>
+                                <h3 class="stat-value">{{ $invoices->total() }}</h3>
                             </div>
                         </div>
                         <div class="col-md-4 mb-3">
                             <div class="stat-card">
                                 <div class="stat-title">Total Value</div>
-                                <h3 class="stat-value">{{ number_format($invoices->sum('grand_total'), 2) }}</h3>
+                                <h3 class="stat-value">${{ number_format($invoices->sum('grand_total'), 2) }}</h3>
                             </div>
                         </div>
                         <div class="col-md-4 mb-3">
@@ -98,7 +98,7 @@
                             <tbody>
                                 @foreach($invoices as $index => $invoice)
                                 <tr>
-                                    <td>{{ $loop->iteration }}</td>
+                                    <td>{{ $invoices->firstItem() + $index }}</td>
                                     <td><code>{{ $invoice->invoice_number }}</code></td>
                                     <td>{{ $invoice->invoice_date->format('d/m/Y') }}</td>
                                     <td>
@@ -108,10 +108,13 @@
                                         @endif
                                     </td>
                                     <td><code class="text-accent">{{ $invoice->tour_ref ?: '-' }}</code></td>
-                                    <td class="text-end fw-semibold">$ {{ number_format($invoice->grand_total, 2) }}</td>
+                                    <td class="text-end fw-semibold">{{ number_format($invoice->grand_total, 2) }}</td>
                                     <td>{{ $invoice->currency }}</td>
                                     <td>
-                                        <a href="{{ route('download', $invoice->id) }}" class="btn btn-accent btn-sm">
+                                        <a href="{{ route('invoice.view', $invoice->id) }}" class="btn btn-success btn-sm" target="_blank">
+                                            <i class="fas fa-eye me-1"></i> View
+                                        </a>
+                                        <a href="{{ route('invoice.download', $invoice->id) }}" class="btn btn-accent btn-sm">
                                             <i class="fas fa-download me-1"></i> PDF
                                         </a>
                                     </td>

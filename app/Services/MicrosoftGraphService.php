@@ -106,10 +106,9 @@ protected function saveEmail($message)
         // Get raw HTML body
         $htmlBody = $message['body']['content'] ?? $message['bodyPreview'] ?? '';
         
-        // Convert HTML to plain text while preserving line breaks
+        // Convert HTML to plain text
         $plainText = $this->htmlToPlainText($htmlBody);
         
-        // Log the full text for debugging (first 2000 chars)
         Log::info("Email body preview: " . substr($plainText, 0, 2000));
         
         $fromEmail = $message['from']['emailAddress']['address'] ?? '';
@@ -120,104 +119,85 @@ protected function saveEmail($message)
         // Check if this is a Tour Confirmation email
         $isTourConfirmation = stripos($plainText, 'TOUR CONFIRMATION') !== false;
         
-        // Extract Tour Ref - THIS IS THE INVOICE NUMBER
-      $tourRef = $this->extractTourReference($plainText);
-
-// NEW code - add these:
-// Extract Invoice Number (VN19610, IS48162 etc.)
-// ========== EXTRACT ALL REFERENCE NUMBERS ==========
-// 1. Extract Invoice Number (VN19610, IS48162, etc.)
-$invoiceNumber = $this->extractInvoiceNumber($plainText);
-
-// 2. Extract Tour Ref (ends with CNTL - like 462414CNTL)
-$tourRef = $this->extractTourReference($plainText);
-
-// 3. Extract Agent Reference No (MMT Booking ID, etc. - like NL2203305926788)
-$agentReferenceNo = $this->extractAgentReferenceNo($plainText);
-
-// 4. If tourRef not found, set to "NA"
-if (!$tourRef) {
-    $tourRef = "NA";
-}
-
-// 5. If no agent reference found, set to "NA" (NOT using tourRef)
-if (!$agentReferenceNo) {
-    $agentReferenceNo = "NA";
-}
-
-// 6. If no invoice number found, set to "NA"
-if (!$invoiceNumber) {
-    $invoiceNumber = "NA";
-}
-
-Log::info("Final Extracted - Invoice: {$invoiceNumber}, Tour Ref: {$tourRef}, Agent Ref: {$agentReferenceNo}");
+        // ========== EXTRACT ALL REFERENCE NUMBERS ==========
+        // 1. Extract Invoice Number FIRST (VN19610, IS48162, etc.)
+        $invoiceNumber = $this->extractInvoiceNumber($plainText);
         
-        // Extract File Handler - This should be in TOUR CONFIRMATION section
+        // 2. Clean the invoice number (remove spaces)
+        $invoiceNumber = $this->cleanInvoiceNumber($invoiceNumber);
+        
+        // 3. Extract Tour Ref (ends with CNTL - like 462414CNTL)
+        $tourRef = $this->extractTourReference($plainText);
+        
+        // 4. Extract Agent Reference No (MMT Booking ID, etc.)
+        $agentReferenceNo = $this->extractAgentReferenceNo($plainText);
+        
+        // 5. Set default values
+        if (!$tourRef) {
+            $tourRef = "NA";
+        }
+        if (!$agentReferenceNo) {
+            $agentReferenceNo = "NA";
+        }
+        if (!$invoiceNumber) {
+            $invoiceNumber = "NA";
+        }
+        
+        Log::info("Final Extracted - Invoice: {$invoiceNumber}, Tour Ref: {$tourRef}, Agent Ref: {$agentReferenceNo}");
+        
+        // Extract other fields
         $fileHandler = $this->extractField($plainText, 'File Handler');
-        
-        // Extract Agent Name - This should be in TOUR CONFIRMATION section
         $agentName = $this->extractField($plainText, 'Agent');
+        
         if ($agentName) {
-            // Clean up agent name - remove anything after dash
             $agentName = preg_replace('/\s*[-–].*$/', '', $agentName);
             $agentName = trim($agentName);
             Log::info("Cleaned Agent Name: {$agentName}");
         }
         
-        // Extract Guest Name
-      // Extract passenger names
-$passengerNames = $this->extractPassengerNames($plainText);
-$guestName = !empty($passengerNames) ? implode(', ', $passengerNames) : $this->extractField($plainText, 'Guests Name');
+        // Extract passenger names
+        $passengerNames = $this->extractPassengerNames($plainText);
+        $guestName = !empty($passengerNames) ? implode(', ', $passengerNames) : $this->extractField($plainText, 'Guests Name');
         
-        // ========== IMPROVED TRAVEL DATE EXTRACTION ==========
-        // ========== IMPROVED TRAVEL DATE EXTRACTION ==========
-$travelDates = $this->extractTravelDates($plainText);
-$travelStart = $travelDates['start'];
-$travelEnd = $travelDates['end'];
+        // Extract travel dates
+        $travelDates = $this->extractTravelDates($plainText);
+        $travelStart = $travelDates['start'];
+        $travelEnd = $travelDates['end'];
         
         // Extract Total Amount
         $totalAmount = null;
         $currency = 'USD';
         
-        // Look for Total Tour Cost
         if (preg_match('/Total Tour Cost[:\s]*([A-Z]{3})?\s*\$?\s*([0-9,]+\.?[0-9]*)/i', $plainText, $match)) {
             $totalAmount = floatval(str_replace(',', '', $match[2]));
             if (isset($match[1]) && !empty($match[1])) {
                 $currency = strtoupper($match[1]);
             }
             Log::info("Found Total Tour Cost: {$currency} {$totalAmount}");
-        }
-        // Look for dollar amount
-        elseif (preg_match('/\$\s*([0-9,]+\.?[0-9]*)/', $plainText, $match)) {
+        } elseif (preg_match('/\$\s*([0-9,]+\.?[0-9]*)/', $plainText, $match)) {
             $totalAmount = floatval(str_replace(',', '', $match[1]));
             Log::info("Found USD amount: {$totalAmount}");
         }
         
         // Extract number of guests
-      // In saveEmail method, replace the number_of_guests extraction with:
-
-// Extract number of guests - handle "2 Adults" format
-$numberOfGuests = null;
-if (preg_match('/No\. of Guests?[:\s]*(\d+)\s*Adults?/i', $plainText, $match)) {
-    $numberOfGuests = intval($match[1]);
-    Log::info("Extracted Number of Guests: {$numberOfGuests}");
-}
-// Alternative pattern
-elseif (preg_match('/No\. of Guests?[:\s]*(\d+)/i', $plainText, $match)) {
-    $numberOfGuests = intval($match[1]);
-    Log::info("Extracted Number of Guests: {$numberOfGuests}");
-}
-
-// Extract pax count from "No. of Adult" or "Adults"
-$paxCount = null;
-if (preg_match('/No\. of Adult[:\s]*(\d+)/i', $plainText, $match)) {
-    $paxCount = intval($match[1]);
-    Log::info("Extracted Pax Count from Adult: {$paxCount}");
-}
-elseif (preg_match('/(\d+)\s*Adults?/i', $plainText, $match)) {
-    $paxCount = intval($match[1]);
-    Log::info("Extracted Pax Count from Adults: {$paxCount}");
-}
+        $numberOfGuests = null;
+        if (preg_match('/No\. of Guests?[:\s]*(\d+)\s*Adults?/i', $plainText, $match)) {
+            $numberOfGuests = intval($match[1]);
+            Log::info("Extracted Number of Guests: {$numberOfGuests}");
+        } elseif (preg_match('/No\. of Guests?[:\s]*(\d+)/i', $plainText, $match)) {
+            $numberOfGuests = intval($match[1]);
+            Log::info("Extracted Number of Guests: {$numberOfGuests}");
+        }
+        
+        // Extract pax count
+        $paxCount = null;
+        if (preg_match('/No\. of Adult[:\s]*(\d+)/i', $plainText, $match)) {
+            $paxCount = intval($match[1]);
+            Log::info("Extracted Pax Count from Adult: {$paxCount}");
+        } elseif (preg_match('/(\d+)\s*Adults?/i', $plainText, $match)) {
+            $paxCount = intval($match[1]);
+            Log::info("Extracted Pax Count from Adults: {$paxCount}");
+        }
         
         // Extract destination
         $destination = $this->extractDestination($plainText, $subject);
@@ -227,6 +207,7 @@ elseif (preg_match('/(\d+)\s*Adults?/i', $plainText, $match)) {
         
         Log::info("Extracted Data", [
             'subject' => $subject,
+            'invoice_number' => $invoiceNumber,
             'tour_ref' => $tourRef,
             'file_handler' => $fileHandler,
             'agent_name' => $agentName,
@@ -238,24 +219,24 @@ elseif (preg_match('/(\d+)\s*Adults?/i', $plainText, $match)) {
             'pax_count' => $paxCount
         ]);
         
-        // Save to database - Add travel_end_date field if exists in migration
+        // Save to database
         $emailData = [
             'message_id' => $message['id'],
             'from_email' => $fromEmail,
             'from_name' => $fromName,
             'subject' => $subject,
-           'body' => $htmlBody,
+            'body' => $htmlBody,
             'body_preview' => substr($plainText, 0, 500),
             'received_at' => $receivedAt,
             'agent_name' => $agentName,
             'guest_name' => $guestName,
             'tour_ref' => $tourRef,
-             'invoice_number' => $invoiceNumber,  
+            'invoice_number' => $invoiceNumber,  
             'file_handler' => $fileHandler,
             'travel_start_date' => $travelStart,
-            'travel_end_date' => $travelEnd, // Add this if column exists
+            'travel_end_date' => $travelEnd,
             'number_of_guests' => $numberOfGuests,
-            'pax_count' => $paxCount, // Add this if column exists
+            'pax_count' => $paxCount,
             'destination' => $destination,
             'total_amount' => $totalAmount,
             'currency' => $currency,
@@ -797,6 +778,11 @@ protected function extractTourReference($text)
  * Extract Invoice Number from email
  * Looks for patterns like: VN19610, IS48162, SG12345, MY12345
  */
+/**
+ * Extract Invoice Number from email
+ * Looks for patterns like: VN19610, IS48162, SG12345, MY12345
+ * Now handles spaces: IS 48363 -> IS48363
+ */
 protected function extractInvoiceNumber($text)
 {
     // First, get the TOUR CONFIRMATION section
@@ -807,6 +793,15 @@ protected function extractInvoiceNumber($text)
     $searchText = !empty($tourSection) ? $tourSection : $text;
     
     // Pattern 1: IS Number field (from 30 Sundays email)
+    // Handle both "IS Number: IS 48363" and "IS Number: IS48363"
+    if (preg_match('/IS\s+Number\s*[:\s]*([A-Z]{2,3})\s+(\d+)/i', $searchText, $match)) {
+        // Found "IS 48363" with space - remove space
+        $value = strtoupper(trim($match[1] . $match[2]));
+        Log::info("✓ Extracted Invoice Number from IS Number (with space removed): {$value}");
+        return $value;
+    }
+    
+    // Same pattern but without space (IS48363)
     if (preg_match('/IS\s+Number\s*[:\s]*([A-Z]{2,3}\d+)/i', $searchText, $match)) {
         $value = strtoupper(trim($match[1]));
         Log::info("✓ Extracted Invoice Number from IS Number: {$value}");
@@ -814,6 +809,12 @@ protected function extractInvoiceNumber($text)
     }
     
     // Pattern 2: Confirmation Number field (from Make My Trip email)
+    if (preg_match('/Confirmation\s+Number\s*[:\s]*([A-Z]{2,3})\s+(\d+)/i', $searchText, $match)) {
+        $value = strtoupper(trim($match[1] . $match[2]));
+        Log::info("✓ Extracted Invoice Number from Confirmation Number (space removed): {$value}");
+        return $value;
+    }
+    
     if (preg_match('/Confirmation\s+Number\s*[:\s]*([A-Z]{2,3}\d+)/i', $searchText, $match)) {
         $value = strtoupper(trim($match[1]));
         Log::info("✓ Extracted Invoice Number from Confirmation Number: {$value}");
@@ -821,14 +822,39 @@ protected function extractInvoiceNumber($text)
     }
     
     // Pattern 3: Invoice No. field
+    if (preg_match('/Invoice\s+No\.?\s*[:\s]*([A-Z]{2,3})\s+(\d+)/i', $searchText, $match)) {
+        $value = strtoupper(trim($match[1] . $match[2]));
+        Log::info("✓ Extracted Invoice Number from Invoice No (space removed): {$value}");
+        return $value;
+    }
+    
     if (preg_match('/Invoice\s+No\.?\s*[:\s]*([A-Z]{2,3}\d+)/i', $searchText, $match)) {
         $value = strtoupper(trim($match[1]));
         Log::info("✓ Extracted Invoice Number from Invoice No: {$value}");
         return $value;
     }
     
-    // Pattern 4: Country code patterns
-    $patterns = [
+    // Pattern 4: Direct patterns with space
+    // "VN 56758" -> "VN56758"
+    $patterns_with_space = [
+        '/\b(VN)\s+(\d{5,})\b/i',
+        '/\b(IS)\s+(\d{5,})\b/i',
+        '/\b(SG)\s+(\d{5,})\b/i',
+        '/\b(MY)\s+(\d{5,})\b/i',
+        '/\b(TH)\s+(\d{5,})\b/i',
+        '/\b(ID)\s+(\d{5,})\b/i',
+    ];
+    
+    foreach ($patterns_with_space as $pattern) {
+        if (preg_match($pattern, $searchText, $match)) {
+            $value = strtoupper(trim($match[1] . $match[2]));  // Remove space
+            Log::info("✓ Extracted Invoice Number from pattern with space: {$value}");
+            return $value;
+        }
+    }
+    
+    // Pattern 5: Without space - VN56758, IS48363
+    $patterns_no_space = [
         '/\b(VN\d{5,})\b/i',
         '/\b(IS\d{5,})\b/i',
         '/\b(SG\d{5,})\b/i',
@@ -837,7 +863,7 @@ protected function extractInvoiceNumber($text)
         '/\b(ID\d{5,})\b/i',
     ];
     
-    foreach ($patterns as $pattern) {
+    foreach ($patterns_no_space as $pattern) {
         if (preg_match($pattern, $searchText, $match)) {
             $value = strtoupper(trim($match[1]));
             Log::info("✓ Extracted Invoice Number from pattern: {$value}");
@@ -947,5 +973,26 @@ protected function extractPassengerNames($text)
     
     return $result ? [$result] : [];
 }
-
+/**
+ * Clean invoice number - remove spaces and normalize
+ */
+protected function cleanInvoiceNumber($invoiceNumber)
+{
+    if (!$invoiceNumber) {
+        return null;
+    }
+    
+    // Remove all spaces
+    $cleaned = str_replace(' ', '', $invoiceNumber);
+    
+    // Convert to uppercase
+    $cleaned = strtoupper($cleaned);
+    
+    // Remove any non-alphanumeric characters except letters and numbers
+    $cleaned = preg_replace('/[^A-Z0-9]/', '', $cleaned);
+    
+    Log::info("Cleaned Invoice Number: '{$invoiceNumber}' -> '{$cleaned}'");
+    
+    return $cleaned;
+}
 }
