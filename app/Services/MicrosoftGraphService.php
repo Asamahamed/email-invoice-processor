@@ -170,75 +170,10 @@ $passengerNames = $this->extractPassengerNames($plainText);
 $guestName = !empty($passengerNames) ? implode(', ', $passengerNames) : $this->extractField($plainText, 'Guests Name');
         
         // ========== IMPROVED TRAVEL DATE EXTRACTION ==========
-        $travelStart = null;
-        $travelEnd = null;
-        
-        // Try to extract from "Arrival Date" field
-        if (preg_match('/Arrival Date[:\s]*([0-9\/\-]+)/i', $plainText, $match)) {
-            try {
-                $travelStart = Carbon::parse(trim($match[1]))->format('Y-m-d');
-                Log::info("Extracted Arrival Date: {$travelStart}");
-            } catch (\Exception $e) {}
-        }
-        
-        // Try to extract from "Travel Date:" or "Tour Date:" field
-        if (!$travelStart) {
-            if (preg_match('/Travel Date[:\s]*([0-9\/\-]+)/i', $plainText, $match)) {
-                try {
-                    $travelStart = Carbon::parse(trim($match[1]))->format('Y-m-d');
-                    Log::info("Extracted Travel Date: {$travelStart}");
-                } catch (\Exception $e) {}
-            }
-        }
-        
-        // Try to extract from date range like "2026-6-10" or "Jun 10, 2026"
-        if (!$travelStart) {
-            if (preg_match('/(\d{4}[-\/]\d{1,2}[-\/]\d{1,2})/', $plainText, $match)) {
-                try {
-                    $travelStart = Carbon::parse(trim($match[1]))->format('Y-m-d');
-                    Log::info("Extracted Date from pattern: {$travelStart}");
-                } catch (\Exception $e) {}
-            }
-        }
-        
-        // Extract Travel End Date
-        // Look for date range like "Jun 10, 2026 - Jun 16, 2026" or "2026-6-10 to 2026-6-16"
-        if (preg_match('/(\d{4}[-\/]\d{1,2}[-\/]\d{1,2})\s*[-–to]+\s*(\d{4}[-\/]\d{1,2}[-\/]\d{1,2})/i', $plainText, $match)) {
-            try {
-                $travelEnd = Carbon::parse(trim($match[2]))->format('Y-m-d');
-                if (!$travelStart) {
-                    $travelStart = Carbon::parse(trim($match[1]))->format('Y-m-d');
-                }
-                Log::info("Extracted Date Range: {$match[1]} to {$match[2]}");
-            } catch (\Exception $e) {}
-        }
-        
-        // Look for end date from the TOUR CONFIRMATION section
-        if (!$travelEnd && $travelStart) {
-            // Try to find end date from the itinerary
-            $endDatePatterns = [
-                '/Bentota\s+([A-Za-z]+)\s+(\d{1,2}),?\s+(\d{4})/i',
-                '/Drop off[:\s]+(\d{1,2}\/\d{1,2}\/\d{4})/i',
-                '/End Date[:\s]+(\d{1,2}\/\d{1,2}\/\d{4})/i',
-            ];
-            
-            foreach ($endDatePatterns as $pattern) {
-                if (preg_match($pattern, $plainText, $match)) {
-                    try {
-                        if (isset($match[3])) {
-                            $travelEnd = Carbon::parse("{$match[2]} {$match[1]} {$match[3]}")->format('Y-m-d');
-                        } else {
-                            $travelEnd = Carbon::parse(trim($match[1]))->format('Y-m-d');
-                        }
-                        Log::info("Extracted End Date from pattern: {$travelEnd}");
-                        break;
-                    } catch (\Exception $e) {}
-                }
-            }
-        }
-        
-        Log::info("Travel Dates - Start: {$travelStart}, End: {$travelEnd}");
-        // ========== END OF TRAVEL DATE EXTRACTION ==========
+        // ========== IMPROVED TRAVEL DATE EXTRACTION ==========
+$travelDates = $this->extractTravelDates($plainText);
+$travelStart = $travelDates['start'];
+$travelEnd = $travelDates['end'];
         
         // Extract Total Amount
         $totalAmount = null;
@@ -350,6 +285,201 @@ elseif (preg_match('/(\d+)\s*Adults?/i', $plainText, $match)) {
     /**
  * Clean text by removing special characters and normalizing spaces
  */
+/**
+ * Comprehensive travel date extraction for all email formats
+ */
+protected function extractTravelDates($text)
+{
+    $travelStart = null;
+    $travelEnd = null;
+    
+    // First, try to extract from TOUR CONFIRMATION section
+    $tourSection = '';
+    if (preg_match('/TOUR CONFIRMATION(.*?)(?:With appreciation|From:|$)/is', $text, $sectionMatch)) {
+        $tourSection = $sectionMatch[1];
+    }
+    $searchText = !empty($tourSection) ? $tourSection : $text;
+    
+    // Log what we're searching
+    Log::info("Searching for travel dates in text length: " . strlen($searchText));
+    
+    // ========== FORMAT A: Arrival Date + Departure Date (Pick Your Trial style) ==========
+    // Example: "Arrival Date    | July 15, 2026" and "Departure Date    | July 18, 2026"
+    if (!$travelStart) {
+        if (preg_match('/Arrival\s*Date[:\s|]*([A-Za-z]+\s+\d{1,2},?\s*\d{4}|\d{4}[-\/]\d{1,2}[-\/]\d{1,2}|\d{1,2}\s*[-–]\s*[A-Za-z]+)/i', $searchText, $match)) {
+            try {
+                $dateStr = trim($match[1]);
+                // Handle "13 - Sep" format
+                if (preg_match('/(\d{1,2})\s*[-–]\s*([A-Za-z]+)/i', $dateStr, $dateMatch)) {
+                    $dateStr = "{$dateMatch[2]} {$dateMatch[1]}, " . date('Y');
+                }
+                $travelStart = Carbon::parse($dateStr)->format('Y-m-d');
+                Log::info("Format A - Arrival Date: {$travelStart}");
+            } catch (\Exception $e) {
+                Log::error("Failed to parse Arrival Date: {$dateStr} - " . $e->getMessage());
+            }
+        }
+    }
+    
+    if (!$travelEnd) {
+        if (preg_match('/Departure\s*Date[:\s|]*([A-Za-z]+\s+\d{1,2},?\s*\d{4}|\d{4}[-\/]\d{1,2}[-\/]\d{1,2}|\d{1,2}\s*[-–]\s*[A-Za-z]+)/i', $searchText, $match)) {
+            try {
+                $dateStr = trim($match[1]);
+                // Handle "20 - Sep" format
+                if (preg_match('/(\d{1,2})\s*[-–]\s*([A-Za-z]+)/i', $dateStr, $dateMatch)) {
+                    $dateStr = "{$dateMatch[2]} {$dateMatch[1]}, " . date('Y');
+                }
+                $travelEnd = Carbon::parse($dateStr)->format('Y-m-d');
+                Log::info("Format A - Departure Date: {$travelEnd}");
+            } catch (\Exception $e) {
+                Log::error("Failed to parse Departure Date: {$dateStr} - " . $e->getMessage());
+            }
+        }
+    }
+    
+    // ========== FORMAT B: Early check-in Date + Departure Date (table with two rows) ==========
+    // Example: 
+    // | Early check-in Date | Arrival Date | Departure Date |
+    // | 12 Jun, 2026        |              |                |
+    // | 19 Jun, 2026        |              |                |
+    if (!$travelStart || !$travelEnd) {
+        // Find the Early check-in/Departure table
+        if (preg_match('/Early check-in Date.*?Departure Date.*?(\d{1,2})\s+([A-Za-z]+)[,\s]*(\d{4}).*?(\d{1,2})\s+([A-Za-z]+)[,\s]*(\d{4})/is', $searchText, $match)) {
+            try {
+                $travelStart = Carbon::parse("{$match[2]} {$match[1]}, {$match[3]}")->format('Y-m-d');
+                $travelEnd = Carbon::parse("{$match[5]} {$match[4]}, {$match[6]}")->format('Y-m-d');
+                Log::info("Format B - Early check-in table: {$travelStart} to {$travelEnd}");
+            } catch (\Exception $e) {}
+        }
+        // Alternative: Two separate date patterns in sequence
+        elseif (preg_match_all('/(\d{1,2})\s+([A-Za-z]+)[,\s]*(\d{4})/i', $searchText, $matches, PREG_SET_ORDER)) {
+            if (count($matches) >= 2) {
+                try {
+                    $travelStart = Carbon::parse("{$matches[0][2]} {$matches[0][1]}, {$matches[0][3]}")->format('Y-m-d');
+                    $travelEnd = Carbon::parse("{$matches[1][2]} {$matches[1][1]}, {$matches[1][3]}")->format('Y-m-d');
+                    Log::info("Format B - Two date pattern: {$travelStart} to {$travelEnd}");
+                } catch (\Exception $e) {}
+            }
+        }
+    }
+    
+    // ========== FORMAT C: Travel Date field with range ==========
+    // Example: "Travel Date: 2026-6-10" and then "2026-6-16"
+    if (!$travelStart || !$travelEnd) {
+        if (preg_match('/Travel Date[:\s]*(\d{4}[-\/]\d{1,2}[-\/]\d{1,2})\s*[-–to]+\s*(\d{4}[-\/]\d{1,2}[-\/]\d{1,2})/i', $searchText, $match)) {
+            try {
+                $travelStart = Carbon::parse(trim($match[1]))->format('Y-m-d');
+                $travelEnd = Carbon::parse(trim($match[2]))->format('Y-m-d');
+                Log::info("Format C - Travel Date range: {$travelStart} to {$travelEnd}");
+            } catch (\Exception $e) {}
+        }
+        // Travel Date on one line, next line has end date
+        elseif (preg_match('/Travel Date[:\s]*(\d{4}[-\/]\d{1,2}[-\/]\d{1,2})/i', $searchText, $match)) {
+            try {
+                $travelStart = Carbon::parse(trim($match[1]))->format('Y-m-d');
+                // Look for date after this position
+                $pos = strpos($searchText, $match[0]) + strlen($match[0]);
+                if (preg_match('/(\d{4}[-\/]\d{1,2}[-\/]\d{1,2})/', substr($searchText, $pos), $endMatch)) {
+                    $travelEnd = Carbon::parse(trim($endMatch[1]))->format('Y-m-d');
+                    Log::info("Format C - Travel Date with next line: {$travelStart} to {$travelEnd}");
+                }
+            } catch (\Exception $e) {}
+        }
+    }
+    
+    // ========== FORMAT D: Itinerary with check-in/check-out dates ==========
+    // Example: "Check In: July 15, 2026" and "Check Out: July 18, 2026"
+    if (!$travelStart || !$travelEnd) {
+        if (preg_match('/Check\s*In[:\s]*([A-Za-z]+\s+\d{1,2},?\s*\d{4})/i', $searchText, $match)) {
+            try {
+                $travelStart = Carbon::parse(trim($match[1]))->format('Y-m-d');
+                Log::info("Format D - Check In: {$travelStart}");
+            } catch (\Exception $e) {}
+        }
+        if (preg_match('/Check\s*Out[:\s]*([A-Za-z]+\s+\d{1,2},?\s*\d{4})/i', $searchText, $match)) {
+            try {
+                $travelEnd = Carbon::parse(trim($match[1]))->format('Y-m-d');
+                Log::info("Format D - Check Out: {$travelEnd}");
+            } catch (\Exception $e) {}
+        }
+    }
+    
+    // ========== FORMAT E: Date range in itinerary (Jun 21, 2026 - Jun 22, 2026) ==========
+    if (!$travelStart || !$travelEnd) {
+        $dateRanges = [];
+        
+        // Pattern: Month Day, Year - Month Day, Year
+        if (preg_match_all('/([A-Za-z]+)\s+(\d{1,2}),?\s+(\d{4})\s*[-–]+\s*([A-Za-z]+)\s+(\d{1,2}),?\s+(\d{4})/i', $searchText, $matches, PREG_SET_ORDER)) {
+            foreach ($matches as $match) {
+                try {
+                    $start = Carbon::parse("{$match[1]} {$match[2]}, {$match[3]}")->format('Y-m-d');
+                    $end = Carbon::parse("{$match[4]} {$match[5]}, {$match[6]}")->format('Y-m-d');
+                    $dateRanges[] = ['start' => $start, 'end' => $end];
+                } catch (\Exception $e) {}
+            }
+        }
+        
+        // Pattern: 2026-6-21 - 2026-6-22
+        if (preg_match_all('/(\d{4}[-\/]\d{1,2}[-\/]\d{1,2})\s*[-–]+\s*(\d{4}[-\/]\d{1,2}[-\/]\d{1,2})/i', $searchText, $matches, PREG_SET_ORDER)) {
+            foreach ($matches as $match) {
+                try {
+                    $start = Carbon::parse(trim($match[1]))->format('Y-m-d');
+                    $end = Carbon::parse(trim($match[2]))->format('Y-m-d');
+                    $dateRanges[] = ['start' => $start, 'end' => $end];
+                } catch (\Exception $e) {}
+            }
+        }
+        
+        if (!empty($dateRanges)) {
+            $starts = array_column($dateRanges, 'start');
+            $ends = array_column($dateRanges, 'end');
+            $travelStart = min($starts);
+            $travelEnd = max($ends);
+            Log::info("Format E - Combined itinerary dates: {$travelStart} to {$travelEnd}");
+        }
+    }
+    
+    // ========== FORMAT F: Arrival Date + Nights calculation ==========
+    if (!$travelStart && preg_match('/Arrival Date[:\s]*(\d{4}[-\/]\d{1,2}[-\/]\d{1,2}|\d{1,2}\s*[-–]\s*\w+)/i', $searchText, $match)) {
+        try {
+            $arrivalDateStr = trim($match[1]);
+            if (preg_match('/(\d{1,2})\s*[-–]\s*(\w+)/i', $arrivalDateStr, $dateMatch)) {
+                $arrivalDateStr = "{$dateMatch[2]} {$dateMatch[1]}, " . date('Y');
+            }
+            $travelStart = Carbon::parse($arrivalDateStr)->format('Y-m-d');
+            Log::info("Format F - Arrival Date: {$travelStart}");
+        } catch (\Exception $e) {}
+    }
+    
+    // Extract nights if available
+    $nights = null;
+    if (preg_match('/Nights?\s*[:\s]*(\d+)/i', $searchText, $match)) {
+        $nights = intval($match[1]);
+        Log::info("Found nights: {$nights}");
+    }
+    
+    // Calculate end date from nights if we have start but no end
+    if ($travelStart && !$travelEnd && $nights) {
+        try {
+            $travelEnd = Carbon::parse($travelStart)->addDays($nights)->format('Y-m-d');
+            Log::info("Calculated end date from nights: {$travelEnd}");
+        } catch (\Exception $e) {}
+    }
+    
+    // ========== FALLBACK: Simple date extraction ==========
+    if (!$travelStart) {
+        if (preg_match('/\b(\d{4}[-\/]\d{1,2}[-\/]\d{1,2})\b/', $searchText, $match)) {
+            try {
+                $travelStart = Carbon::parse(trim($match[1]))->format('Y-m-d');
+                Log::info("Fallback - Simple start date: {$travelStart}");
+            } catch (\Exception $e) {}
+        }
+    }
+    
+    Log::info("FINAL EXTRACTED - Start: {$travelStart}, End: {$travelEnd}");
+    
+    return ['start' => $travelStart, 'end' => $travelEnd];
+}
 protected function cleanText($text)
 {
     // Remove special Unicode characters (document icons, emojis, etc.)

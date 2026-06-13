@@ -12,6 +12,14 @@ class PnlEmailService
 {
     protected $accessToken;
     
+    // Add exchange rates here
+    private $exchangeRates = [
+        'LK' => 330,
+        'VN' => 25500,
+        'SG' => 1.35,
+        'MY' => 4.70,
+    ];
+    
     public function __construct()
     {
         $this->authenticate();
@@ -89,14 +97,8 @@ class PnlEmailService
             $subject = $message['subject'] ?? 'No Subject';
             $htmlBody = $message['body']['content'] ?? $message['bodyPreview'] ?? '';
             
-            // Better text extraction - remove HTML tags and clean
             $plainText = strip_tags($htmlBody);
-            // Remove excessive whitespace and line breaks
-            $plainText = preg_replace('/\s+/', ' ', $plainText);
-            // Also try to get the raw text from the body if available
-            if (empty($plainText) && isset($message['body']['content'])) {
-                $plainText = $message['body']['content'];
-            }
+            $plainText = preg_replace('/\r\n/', "\n", $plainText);
             
             Log::info("Processing email: " . $subject);
             Log::info("Email preview: " . substr($plainText, 0, 500));
@@ -108,32 +110,26 @@ class PnlEmailService
             
             // ========== EXTRACT HEADER DATA ==========
             
-            // 1. Tour Number
             $tourNumber = null;
             if (preg_match('/Tour No:\s*#?(\d+)/i', $plainText, $match)) {
                 $tourNumber = $match[1];
                 Log::info("Tour Number: " . $tourNumber);
             }
             
-            // 2. IS Number (Invoice Number) - "Is Number: VN 5583"
             $isNumber = null;
             if (preg_match('/Is Number:\s*([A-Z]{2})\s*(\d+)/i', $plainText, $match)) {
                 $isNumber = $match[1] . $match[2];
                 Log::info("IS Number: " . $isNumber);
             }
             
-            // 3. Agent Name
             $agentName = 'Unknown';
             if (preg_match('/Agent:\s*([^\n]+?)(?:\s+No\.|\s+Currency|$)/i', $plainText, $match)) {
                 $agentName = trim($match[1]);
                 Log::info("Agent Name: " . $agentName);
             }
             
-            // 4. Pax and Nights
             $totalPax = 0;
-            if (preg_match('/No\.\s*Adult:\s*(\d+)/i', $plainText, $match)) {
-                $totalPax = intval($match[1]);
-            } elseif (preg_match('/No\.\s*Pax:\s*(\d+)/i', $plainText, $match)) {
+            if (preg_match('/No\.\s*Pax:\s*(\d+)/i', $plainText, $match)) {
                 $totalPax = intval($match[1]);
             }
             
@@ -142,63 +138,76 @@ class PnlEmailService
                 $totalNights = intval($match[1]);
             }
             
-            // 5. Total Tour Cost - CRITICAL FIX: matches "Total Tour Cost348.01 USD" (no space)
+            // FIX: Extract Total Tour Cost - handle commas in numbers (e.g., "1,135.96")
             $totalTourCost = 0;
-            // Pattern for "Total Tour Cost348.01 USD" (no space)
-            if (preg_match('/Total Tour Cost(\d+(?:\.\d+)?)/i', $plainText, $match)) {
-                $totalTourCost = floatval($match[1]);
-                Log::info("Total Tour Cost (no space): " . $totalTourCost);
-            }
-            // Pattern for "Total Tour Cost 348.01 USD" (with space)
-            elseif (preg_match('/Total Tour Cost\s+(\d+(?:\.\d+)?)/i', $plainText, $match)) {
-                $totalTourCost = floatval($match[1]);
-                Log::info("Total Tour Cost (with space): " . $totalTourCost);
-            }
-            // Pattern with colon
-            elseif (preg_match('/Total Tour Cost:\s*(\d+(?:\.\d+)?)/i', $plainText, $match)) {
-                $totalTourCost = floatval($match[1]);
-                Log::info("Total Tour Cost (colon): " . $totalTourCost);
+            $patterns = [
+                '/Total Tour Cost\s+([\d,]+(?:\.\d+)?)/i',
+                '/Total Tour Cost\s*:?\s*([\d,]+(?:\.\d+)?)/i',
+                '/Total Tour Cost\s*=\s*([\d,]+(?:\.\d+)?)/i',
+            ];
+            
+            foreach ($patterns as $pattern) {
+                if (preg_match($pattern, $plainText, $match)) {
+                    // Remove commas from the number
+                    $amount = str_replace(',', '', $match[1]);
+                    $totalTourCost = floatval($amount);
+                    if ($totalTourCost > 0) {
+                        Log::info("Total Tour Cost found: " . $totalTourCost);
+                        break;
+                    }
+                }
             }
             
-            // 6. Transport Total - Look for Transport section
-            $transportTotal = 0;
-            if (preg_match('/Transport.*?Total\s+Transport\s+(\d+(?:\.\d+)?)/is', $plainText, $match)) {
-                $transportTotal = floatval($match[1]);
-                Log::info("Transport Total: " . $transportTotal);
-            }
-            
-            // 7. Attraction Total - Look for Attraction or Other Rates section
+            // Extract Other Rates total (Attraction)
             $attractionTotal = 0;
-            if (preg_match('/Attraction.*?Total\s+(\d+(?:\.\d+)?)/is', $plainText, $match)) {
-                $attractionTotal = floatval($match[1]);
-                Log::info("Attraction Total: " . $attractionTotal);
-            }
-            if ($attractionTotal == 0 && preg_match('/Other Rates.*?Total\s+(\d+(?:\.\d+)?)/is', $plainText, $match)) {
-                $attractionTotal = floatval($match[1]);
+            if (preg_match('/Other Rates.*?Total\s*:?\s*([\d,]+(?:\.\d+)?)\s*USD/is', $plainText, $match)) {
+                $amount = str_replace(',', '', $match[1]);
+                $attractionTotal = floatval($amount);
                 Log::info("Other Rates Total: " . $attractionTotal);
             }
             
-            // 8. Country and Currency
-            $countryCode = 'VN'; // Default for this email
-            $currency = 'VND';
-            if ($isNumber && strpos($isNumber, 'VN') === 0) {
+            // Extract Transport total
+            $transportTotal = 0;
+            if (preg_match('/Transport.*?Total\s*:?\s*([\d,]+(?:\.\d+)?)\s*USD/is', $plainText, $match)) {
+                $amount = str_replace(',', '', $match[1]);
+                $transportTotal = floatval($amount);
+                Log::info("Transport Total: " . $transportTotal);
+            }
+            
+            // Extract Tour Transfers total
+            $tourTransfersTotal = 0;
+            if (preg_match('/Tour Transfers.*?Total\s*:?\s*([\d,]+(?:\.\d+)?)\s*USD/is', $plainText, $match)) {
+                $amount = str_replace(',', '', $match[1]);
+                $tourTransfersTotal = floatval($amount);
+                Log::info("Tour Transfers Total: " . $tourTransfersTotal);
+            }
+            
+            // Extract Meals total
+            $mealsTotal = 0;
+            if (preg_match('/Meals.*?Total\s*:?\s*([\d,]+(?:\.\d+)?)\s*USD/is', $plainText, $match)) {
+                $amount = str_replace(',', '', $match[1]);
+                $mealsTotal = floatval($amount);
+                Log::info("Meals Total: " . $mealsTotal);
+            }
+            
+            // Country and Currency
+            $countryCode = 'SG';
+            $currency = 'SGD';
+            if ($isNumber && strpos($isNumber, 'IS') === 0) {
+                $countryCode = 'LK';
+                $currency = 'LKR';
+            } elseif ($isNumber && strpos($isNumber, 'VN') === 0) {
                 $countryCode = 'VN';
                 $currency = 'VND';
-            } elseif ($isNumber && strpos($isNumber, 'SG') === 0) {
-                $countryCode = 'SG';
-                $currency = 'SGD';
             } elseif ($isNumber && strpos($isNumber, 'MY') === 0) {
                 $countryCode = 'MY';
                 $currency = 'MYR';
-            } elseif ($isNumber && strpos($isNumber, 'IS') === 0) {
-                $countryCode = 'LK';
-                $currency = 'LKR';
             }
             
             // ========== CREATE PNL ITEMS ==========
             $pnlItems = [];
             
-            // Add INVOICE item (Total Tour Cost)
+            // Add INVOICE item
             if ($totalTourCost > 0) {
                 $pnlItems[] = [
                     'type' => 'INVOICE',
@@ -208,25 +217,6 @@ class PnlEmailService
                     'currency' => 'USD',
                     'hotel_name' => null,
                 ];
-            }
-            
-            // Add HOTEL items
-            if (preg_match_all('/Hotel:\s*([^\n]+?)\s+(\d+(?:\.\d+)?)/i', $plainText, $hotelMatches, PREG_SET_ORDER)) {
-                foreach ($hotelMatches as $hotelMatch) {
-                    $hotelName = trim($hotelMatch[1]);
-                    $amount = floatval($hotelMatch[2]);
-                    if ($amount > 0) {
-                        $pnlItems[] = [
-                            'type' => 'HOTEL',
-                            'service_name' => $hotelName,
-                            'amount_original' => $amount,
-                            'amount_converted' => $amount,
-                            'currency' => 'USD',
-                            'hotel_name' => $hotelName,
-                        ];
-                        Log::info("Found Hotel: {$hotelName} - \${$amount}");
-                    }
-                }
             }
             
             // Add TRANSPORT item
@@ -241,7 +231,19 @@ class PnlEmailService
                 ];
             }
             
-            // Add ATTRACTION item
+            // Add TOUR TRANSFER item
+            if ($tourTransfersTotal > 0) {
+                $pnlItems[] = [
+                    'type' => 'TOUR TRANSFER',
+                    'service_name' => 'Tour Transfer Expenses',
+                    'amount_original' => $tourTransfersTotal,
+                    'amount_converted' => $tourTransfersTotal,
+                    'currency' => 'USD',
+                    'hotel_name' => null,
+                ];
+            }
+            
+            // Add ATTRACTION item (from Other Rates)
             if ($attractionTotal > 0) {
                 $pnlItems[] = [
                     'type' => 'ATTRACTION',
@@ -253,14 +255,27 @@ class PnlEmailService
                 ];
             }
             
-            // Log extracted data
+            // Add MEALS item
+            if ($mealsTotal > 0) {
+                $pnlItems[] = [
+                    'type' => 'MEALS',
+                    'service_name' => 'Meals Expenses',
+                    'amount_original' => $mealsTotal,
+                    'amount_converted' => $mealsTotal,
+                    'currency' => 'USD',
+                    'hotel_name' => null,
+                ];
+            }
+            
             Log::info("Extracted Data Summary", [
                 'tour_number' => $tourNumber,
                 'is_number' => $isNumber,
                 'agent_name' => $agentName,
                 'total_tour_cost' => $totalTourCost,
                 'transport_total' => $transportTotal,
+                'tour_transfers_total' => $tourTransfersTotal,
                 'attraction_total' => $attractionTotal,
+                'meals_total' => $mealsTotal,
                 'country_code' => $countryCode,
                 'items_count' => count($pnlItems)
             ]);
@@ -280,9 +295,9 @@ class PnlEmailService
                 'invoice_number' => $isNumber,
                 'is_number' => $isNumber,
                 'amount' => $totalTourCost,
-                'currency' => $currency,
+                'currency' => 'USD',
                 'country_code' => $countryCode,
-                'exchange_rate_used' => 1,
+                'exchange_rate_used' => $this->exchangeRates[$countryCode] ?? 1,
                 'category' => 'Multi',
                 'status' => 'pending',
                 'read_status' => $readStatus,
@@ -290,7 +305,9 @@ class PnlEmailService
                 'extracted_data' => json_encode([
                     'tour_number' => $tourNumber,
                     'transport_total' => $transportTotal,
+                    'tour_transfers_total' => $tourTransfersTotal,
                     'attraction_total' => $attractionTotal,
+                    'meals_total' => $mealsTotal,
                     'items_count' => count($pnlItems)
                 ]),
             ]);
@@ -321,6 +338,7 @@ class PnlEmailService
             
         } catch (\Exception $e) {
             Log::error('Save PnL email failed: ' . $e->getMessage());
+            Log::error($e->getTraceAsString());
             return false;
         }
     }

@@ -269,4 +269,7 @@ public function viewExcel($country)
         return redirect()->back()->with('error', 'Failed to load Excel: ' . $e->getMessage());
     }
 }
+
+
+
 }
