@@ -449,6 +449,394 @@ public function viewExcel($country)
     }
 }
 
-
-
+/**
+ * Export by specific country (for excel-preview page)
+ */
+public function exportByCountry($country, Request $request)
+{
+    try {
+        $query = PnlRecord::with('items')->where('country_code', $country);
+        
+        // Apply date filters if any
+        if ($request->filled('date_from')) {
+            $query->whereDate('received_at', '>=', $request->date_from);
+        }
+        if ($request->filled('date_to')) {
+            $query->whereDate('received_at', '<=', $request->date_to);
+        }
+        
+        $records = $query->orderBy('received_at', 'desc')->get();
+        
+        if ($records->isEmpty()) {
+            return redirect()->back()->with('error', "No records found for country: {$country}");
+        }
+        
+        // Create filename with country
+        $countryNames = [
+            'SG' => 'Singapore',
+            'MY' => 'Malaysia', 
+            'VN' => 'Vietnam',
+            'LK' => 'Sri Lanka'
+        ];
+        $countryName = $countryNames[$country] ?? $country;
+        $filename = "pnl_export_{$countryName}_" . date('Y-m-d_His') . ".xlsx";
+        
+        // Create new Spreadsheet
+        $spreadsheet = new \PhpOffice\PhpSpreadsheet\Spreadsheet();
+        $sheet = $spreadsheet->getActiveSheet();
+        $sheet->setTitle('PnL - ' . $countryName);
+        
+        // Set headers
+        $headers = [
+            'A1' => 'S.No',
+            'B1' => 'Tour Number',
+            'C1' => 'Invoice Number',
+            'D1' => 'Type',
+            'E1' => 'Start Date',
+            'F1' => 'End Date',
+            'G1' => 'Credit Type',
+            'H1' => 'Agent Name',
+            'I1' => 'Hotel Name',
+            'J1' => 'Amount (USD)',
+            'K1' => 'Exchange Rate',
+            'L1' => 'Amount (Local)',
+            'M1' => 'Remarks'
+        ];
+        
+        foreach ($headers as $cell => $value) {
+            $sheet->setCellValue($cell, $value);
+        }
+        
+        // Style header row
+        $headerStyle = [
+            'font' => ['bold' => true, 'color' => ['rgb' => 'FFFFFF'], 'size' => 11],
+            'fill' => ['fillType' => \PhpOffice\PhpSpreadsheet\Style\Fill::FILL_SOLID, 'startColor' => ['rgb' => '4472C4']],
+            'alignment' => ['horizontal' => \PhpOffice\PhpSpreadsheet\Style\Alignment::HORIZONTAL_CENTER]
+        ];
+        $sheet->getStyle('A1:M1')->applyFromArray($headerStyle);
+        
+        // Color definitions
+        $colors = [
+            'INVOICE' => 'D5E8D4',
+            'HOTEL' => 'FFF2CC',
+            'TRANSPORT' => 'DDEBF7',
+            'TOUR TRANSFER' => 'E2EFDA',
+            'ATTRACTION' => 'FCE4D6',
+            'MEALS' => 'E1C699',
+            'OTHER RATES' => 'D9D9D9'
+        ];
+        
+        // Add data rows
+        $row = 2;
+        $globalSno = 1;
+        
+        foreach ($records as $record) {
+            $exchangeRate = $record->exchange_rate_used ?? 1;
+            $tourRef = $record->tour_ref;
+            $invoiceNumber = $record->invoice_number;
+            $agentName = $record->agent_name;
+            $startDate = $record->start_date ?? ($record->received_at ? $record->received_at->format('Y-m-d') : date('Y-m-d'));
+            $endDate = $record->end_date ?? ($record->received_at ? $record->received_at->format('Y-m-d') : date('Y-m-d'));
+            
+            $items = $record->items;
+            
+            if ($items->isEmpty()) {
+                $remarks = "Pax: {$record->total_pax}, Nights: {$record->total_nights}";
+                
+                $sheet->setCellValue("A{$row}", $globalSno++);
+                $sheet->setCellValue("B{$row}", $tourRef ?? '-');
+                $sheet->setCellValue("C{$row}", $invoiceNumber ?? '-');
+                $sheet->setCellValue("D{$row}", 'INVOICE');
+                $sheet->setCellValue("E{$row}", $startDate);
+                $sheet->setCellValue("F{$row}", $endDate);
+                $sheet->setCellValue("G{$row}", 'Credit');
+                $sheet->setCellValue("H{$row}", $agentName ?? '-');
+                $sheet->setCellValue("I{$row}", '-');
+                $sheet->setCellValue("J{$row}", $record->amount);
+                $sheet->setCellValue("K{$row}", $exchangeRate);
+                $sheet->setCellValue("L{$row}", round($record->amount * $exchangeRate, 2));
+                $sheet->setCellValue("M{$row}", $remarks);
+                
+                if (isset($colors['INVOICE'])) {
+                    $sheet->getStyle("A{$row}:M{$row}")->getFill()
+                        ->setFillType(\PhpOffice\PhpSpreadsheet\Style\Fill::FILL_SOLID)
+                        ->getStartColor()->setRGB($colors['INVOICE']);
+                }
+                $row++;
+            } else {
+                foreach ($items as $item) {
+                    $remarks = '';
+                    $itemDetails = json_decode($item->item_details, true);
+                    $hotelName = $item->hotel_name ?? '-';
+                    
+                    if ($item->type == 'INVOICE') {
+                        $remarks = "Pax: {$record->total_pax}, Nights: {$record->total_nights}";
+                    } elseif ($item->type == 'HOTEL') {
+                        $remarks = ($itemDetails['nights'] ?? 1) . ' nights';
+                        $hotelName = $item->service_name ?? $item->hotel_name ?? '-';
+                    } elseif ($item->type == 'ATTRACTION') {
+                        $remarks = $itemDetails['remarks'] ?? $item->service_name ?? 'Attraction fees';
+                    } elseif ($item->type == 'TOUR TRANSFER') {
+                        $remarks = 'Total tour transfer expenses';
+                    } elseif ($item->type == 'TRANSPORT') {
+                        $remarks = 'Total transport expenses';
+                    } elseif ($item->type == 'MEALS') {
+                        $remarks = 'Meals expenses';
+                    } elseif ($item->type == 'OTHER RATES') {
+                        $remarks = $itemDetails['remarks'] ?? 'Other fees';
+                    }
+                    
+                    $sheet->setCellValue("A{$row}", $globalSno++);
+                    $sheet->setCellValue("B{$row}", $tourRef ?? '-');
+                    $sheet->setCellValue("C{$row}", $invoiceNumber ?? '-');
+                    $sheet->setCellValue("D{$row}", $item->type);
+                    $sheet->setCellValue("E{$row}", $startDate);
+                    $sheet->setCellValue("F{$row}", $endDate);
+                    $sheet->setCellValue("G{$row}", $item->credit_type ?? 'Credit');
+                    $sheet->setCellValue("H{$row}", $agentName ?? '-');
+                    $sheet->setCellValue("I{$row}", $hotelName);
+                    $sheet->setCellValue("J{$row}", $item->amount_original);
+                    $sheet->setCellValue("K{$row}", $exchangeRate);
+                    $sheet->setCellValue("L{$row}", round($item->amount_original * $exchangeRate, 2));
+                    $sheet->setCellValue("M{$row}", $remarks);
+                    
+                    if (isset($colors[$item->type])) {
+                        $sheet->getStyle("A{$row}:M{$row}")->getFill()
+                            ->setFillType(\PhpOffice\PhpSpreadsheet\Style\Fill::FILL_SOLID)
+                            ->getStartColor()->setRGB($colors[$item->type]);
+                    }
+                    $row++;
+                }
+            }
+            $row++;
+        }
+        
+        // Auto-size columns
+        foreach (range('A', 'M') as $col) {
+            $sheet->getColumnDimension($col)->setAutoSize(true);
+        }
+        
+        // Add borders
+        $highestRow = $row - 1;
+        if ($highestRow >= 2) {
+            $sheet->getStyle("A2:M{$highestRow}")->applyFromArray([
+                'borders' => [
+                    'allBorders' => [
+                        'borderStyle' => \PhpOffice\PhpSpreadsheet\Style\Border::BORDER_THIN,
+                        'color' => ['rgb' => 'CCCCCC']
+                    ]
+                ]
+            ]);
+        }
+        
+        $writer = new \PhpOffice\PhpSpreadsheet\Writer\Xlsx($spreadsheet);
+        $tempFile = tempnam(sys_get_temp_dir(), 'pnl_');
+        $writer->save($tempFile);
+        
+        return response()->download($tempFile, $filename, [
+            'Content-Type' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        ])->deleteFileAfterSend(true);
+        
+    } catch (\Exception $e) {
+        Log::error('Export by country failed: ' . $e->getMessage());
+        return redirect()->back()->with('error', 'Failed to export: ' . $e->getMessage());
+    }
+}
+/**
+ * Export ONLY approved/updated records by specific country
+ */
+public function exportByCountryApproved($country, Request $request)
+{
+    try {
+        // ONLY get records that are approved and completed
+        $query = PnlRecord::with('items')
+            ->where('country_code', $country)
+            ->where('status', 'approved')
+            ->where('processing_status', 'completed');
+        
+        // Apply date filters if any
+        if ($request->filled('date_from')) {
+            $query->whereDate('received_at', '>=', $request->date_from);
+        }
+        if ($request->filled('date_to')) {
+            $query->whereDate('received_at', '<=', $request->date_to);
+        }
+        
+        $records = $query->orderBy('received_at', 'desc')->get();
+        
+        if ($records->isEmpty()) {
+            return redirect()->back()->with('error', "No approved/updated records found for country: {$country}");
+        }
+        
+        // Create filename with country and "approved" suffix
+        $countryNames = [
+            'SG' => 'Singapore',
+            'MY' => 'Malaysia', 
+            'VN' => 'Vietnam',
+            'LK' => 'Sri Lanka'
+        ];
+        $countryName = $countryNames[$country] ?? $country;
+        $filename = "pnl_export_{$countryName}_updated_only_" . date('Y-m-d_His') . ".xlsx";
+        
+        // Create new Spreadsheet
+        $spreadsheet = new \PhpOffice\PhpSpreadsheet\Spreadsheet();
+        $sheet = $spreadsheet->getActiveSheet();
+        $sheet->setTitle('PnL - ' . $countryName . ' (Updated)');
+        
+        // Set headers
+        $headers = [
+            'A1' => 'S.No',
+            'B1' => 'Tour Number',
+            'C1' => 'Invoice Number',
+            'D1' => 'Type',
+            'E1' => 'Start Date',
+            'F1' => 'End Date',
+            'G1' => 'Credit Type',
+            'H1' => 'Agent Name',
+            'I1' => 'Hotel Name',
+            'J1' => 'Amount (USD)',
+            'K1' => 'Exchange Rate',
+            'L1' => 'Amount (Local)',
+            'M1' => 'Remarks'
+        ];
+        
+        foreach ($headers as $cell => $value) {
+            $sheet->setCellValue($cell, $value);
+        }
+        
+        // Style header row
+        $headerStyle = [
+            'font' => ['bold' => true, 'color' => ['rgb' => 'FFFFFF'], 'size' => 11],
+            'fill' => ['fillType' => \PhpOffice\PhpSpreadsheet\Style\Fill::FILL_SOLID, 'startColor' => ['rgb' => '4472C4']],
+            'alignment' => ['horizontal' => \PhpOffice\PhpSpreadsheet\Style\Alignment::HORIZONTAL_CENTER]
+        ];
+        $sheet->getStyle('A1:M1')->applyFromArray($headerStyle);
+        
+        // Color definitions
+        $colors = [
+            'INVOICE' => 'D5E8D4',
+            'HOTEL' => 'FFF2CC',
+            'TRANSPORT' => 'DDEBF7',
+            'TOUR TRANSFER' => 'E2EFDA',
+            'ATTRACTION' => 'FCE4D6',
+            'MEALS' => 'E1C699',
+            'OTHER RATES' => 'D9D9D9'
+        ];
+        
+        // Add data rows
+        $row = 2;
+        $globalSno = 1;
+        
+        foreach ($records as $record) {
+            $exchangeRate = $record->exchange_rate_used ?? 1;
+            $tourRef = $record->tour_ref;
+            $invoiceNumber = $record->invoice_number;
+            $agentName = $record->agent_name;
+            $startDate = $record->start_date ?? ($record->received_at ? $record->received_at->format('Y-m-d') : date('Y-m-d'));
+            $endDate = $record->end_date ?? ($record->received_at ? $record->received_at->format('Y-m-d') : date('Y-m-d'));
+            
+            $items = $record->items;
+            
+            if ($items->isEmpty()) {
+                $remarks = "Pax: {$record->total_pax}, Nights: {$record->total_nights}";
+                
+                $sheet->setCellValue("A{$row}", $globalSno++);
+                $sheet->setCellValue("B{$row}", $tourRef ?? '-');
+                $sheet->setCellValue("C{$row}", $invoiceNumber ?? '-');
+                $sheet->setCellValue("D{$row}", 'INVOICE');
+                $sheet->setCellValue("E{$row}", $startDate);
+                $sheet->setCellValue("F{$row}", $endDate);
+                $sheet->setCellValue("G{$row}", 'Credit');
+                $sheet->setCellValue("H{$row}", $agentName ?? '-');
+                $sheet->setCellValue("I{$row}", '-');
+                $sheet->setCellValue("J{$row}", $record->amount);
+                $sheet->setCellValue("K{$row}", $exchangeRate);
+                $sheet->setCellValue("L{$row}", round($record->amount * $exchangeRate, 2));
+                $sheet->setCellValue("M{$row}", $remarks);
+                
+                if (isset($colors['INVOICE'])) {
+                    $sheet->getStyle("A{$row}:M{$row}")->getFill()
+                        ->setFillType(\PhpOffice\PhpSpreadsheet\Style\Fill::FILL_SOLID)
+                        ->getStartColor()->setRGB($colors['INVOICE']);
+                }
+                $row++;
+            } else {
+                foreach ($items as $item) {
+                    $remarks = '';
+                    $itemDetails = json_decode($item->item_details, true);
+                    $hotelName = $item->hotel_name ?? '-';
+                    
+                    if ($item->type == 'INVOICE') {
+                        $remarks = "Pax: {$record->total_pax}, Nights: {$record->total_nights}";
+                    } elseif ($item->type == 'HOTEL') {
+                        $remarks = ($itemDetails['nights'] ?? 1) . ' nights';
+                        $hotelName = $item->service_name ?? $item->hotel_name ?? '-';
+                    } elseif ($item->type == 'ATTRACTION') {
+                        $remarks = $itemDetails['remarks'] ?? $item->service_name ?? 'Attraction fees';
+                    } elseif ($item->type == 'TOUR TRANSFER') {
+                        $remarks = 'Total tour transfer expenses';
+                    } elseif ($item->type == 'TRANSPORT') {
+                        $remarks = 'Total transport expenses';
+                    } elseif ($item->type == 'MEALS') {
+                        $remarks = 'Meals expenses';
+                    } elseif ($item->type == 'OTHER RATES') {
+                        $remarks = $itemDetails['remarks'] ?? 'Other fees';
+                    }
+                    
+                    $sheet->setCellValue("A{$row}", $globalSno++);
+                    $sheet->setCellValue("B{$row}", $tourRef ?? '-');
+                    $sheet->setCellValue("C{$row}", $invoiceNumber ?? '-');
+                    $sheet->setCellValue("D{$row}", $item->type);
+                    $sheet->setCellValue("E{$row}", $startDate);
+                    $sheet->setCellValue("F{$row}", $endDate);
+                    $sheet->setCellValue("G{$row}", $item->credit_type ?? 'Credit');
+                    $sheet->setCellValue("H{$row}", $agentName ?? '-');
+                    $sheet->setCellValue("I{$row}", $hotelName);
+                    $sheet->setCellValue("J{$row}", $item->amount_original);
+                    $sheet->setCellValue("K{$row}", $exchangeRate);
+                    $sheet->setCellValue("L{$row}", round($item->amount_original * $exchangeRate, 2));
+                    $sheet->setCellValue("M{$row}", $remarks);
+                    
+                    if (isset($colors[$item->type])) {
+                        $sheet->getStyle("A{$row}:M{$row}")->getFill()
+                            ->setFillType(\PhpOffice\PhpSpreadsheet\Style\Fill::FILL_SOLID)
+                            ->getStartColor()->setRGB($colors[$item->type]);
+                    }
+                    $row++;
+                }
+            }
+            $row++;
+        }
+        
+        // Auto-size columns
+        foreach (range('A', 'M') as $col) {
+            $sheet->getColumnDimension($col)->setAutoSize(true);
+        }
+        
+        // Add borders
+        $highestRow = $row - 1;
+        if ($highestRow >= 2) {
+            $sheet->getStyle("A2:M{$highestRow}")->applyFromArray([
+                'borders' => [
+                    'allBorders' => [
+                        'borderStyle' => \PhpOffice\PhpSpreadsheet\Style\Border::BORDER_THIN,
+                        'color' => ['rgb' => 'CCCCCC']
+                    ]
+                ]
+            ]);
+        }
+        
+        $writer = new \PhpOffice\PhpSpreadsheet\Writer\Xlsx($spreadsheet);
+        $tempFile = tempnam(sys_get_temp_dir(), 'pnl_');
+        $writer->save($tempFile);
+        
+        return response()->download($tempFile, $filename, [
+            'Content-Type' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        ])->deleteFileAfterSend(true);
+        
+    } catch (\Exception $e) {
+        Log::error('Export approved by country failed: ' . $e->getMessage());
+        return redirect()->back()->with('error', 'Failed to export: ' . $e->getMessage());
+    }
+}
 }

@@ -546,93 +546,120 @@ private function extractHotelsFromEmail($html)
     /**
      * Extract Transport total
      */
-    private function extractTransportTotalFromEmail($text)
-    {
-        if (!preg_match('/Transport/i', $text)) return 0;
-        
-        if (preg_match('/Total\s*:?\s*([\d,]+(?:\.\d+)?)\s*USD/i', $text, $match)) {
-            return floatval(str_replace(',', '', $match[1]));
-        }
-        
-        if (preg_match('/Transport.*?Total[\s\|]*:?\s*([\d,]+(?:\.\d+)?)\s*USD/is', $text, $match)) {
-            return floatval(str_replace(',', '', $match[1]));
-        }
-        
-        return 0;
+private function extractTransportTotalFromEmail($text)
+{
+    // First check if Transport section even exists
+    if (!preg_match('/Transport/i', $text)) return 0;
+    
+    // Look for Total Transport pattern
+    if (preg_match('/Total Transport\s*:?\s*([\d,]+(?:\.\d+)?)\s*USD/i', $text, $match)) {
+        $total = floatval(str_replace(',', '', $match[1]));
+        Log::info("Transport Total found: " . $total);
+        return $total > 0 ? $total : 0;
     }
+    
+    // Alternative pattern
+    if (preg_match('/Transport.*?Total[\s\|]*:?\s*([\d,]+(?:\.\d+)?)\s*USD/is', $text, $match)) {
+        $total = floatval(str_replace(',', '', $match[1]));
+        Log::info("Transport Total found (alt): " . $total);
+        return $total > 0 ? $total : 0;
+    }
+    
+    return 0;
+}
     
     /**
      * Extract Other Rates total
      */
-    private function extractOtherRatesTotalFromEmail($text)
-    {
-        if (!preg_match('/Other Rates/i', $text)) return 0;
-        
-        if (preg_match('/Other Rates.*?Total\s*:?\s*([\d,]+(?:\.\d+)?)\s*USD/is', $text, $match)) {
-            return floatval(str_replace(',', '', $match[1]));
-        }
-        
-        if (preg_match('/Pinnawala Elephant Orphanage.*?([\d,]+(?:\.\d+)?)/i', $text, $match)) {
-            return floatval(str_replace(',', '', $match[1]));
-        }
-        
-        return 0;
+/**
+ * Extract Other Rates total - ONLY return > 0
+ */
+private function extractOtherRatesTotalFromEmail($text)
+{
+    if (!preg_match('/Other Rates/i', $text)) return 0;
+    
+    if (preg_match('/Other Rates.*?Total\s*:?\s*([\d,]+(?:\.\d+)?)\s*USD/is', $text, $match)) {
+        $total = floatval(str_replace(',', '', $match[1]));
+        Log::info("Other Rates Total: " . $total);
+        return $total > 0 ? $total : 0;
     }
+    
+    return 0;
+}
     
     /**
      * Extract Attraction total - only if non-zero
      */
-    private function extractAttractionTotalFromEmail($text)
-    {
-        if (!preg_match('/Attraction/i', $text)) return 0;
-        
-        if (preg_match('/Attraction.*?Total\s*\|\s*([\d,]+(?:\.\d+)?)\s*USD/is', $text, $match)) {
-            $total = floatval(str_replace(',', '', $match[1]));
-            if ($total > 0) return $total;
-        }
-        
-        if (preg_match('/Attraction.*?Total[\s\|]*:?\s*([\d,]+(?:\.\d+)?)\s*USD/is', $text, $match)) {
-            return floatval(str_replace(',', '', $match[1]));
-        }
-        
-        return 0;
+/**
+ * Extract Attraction total - ONLY return > 0
+ */
+private function extractAttractionTotalFromEmail($text)
+{
+    if (!preg_match('/Attraction/i', $text)) return 0;
+    
+    if (preg_match('/Attraction.*?Total\s*\|\s*([\d,]+(?:\.\d+)?)\s*USD/is', $text, $match)) {
+        $total = floatval(str_replace(',', '', $match[1]));
+        Log::info("Attraction total found: " . $total);
+        return $total > 0 ? $total : 0;
     }
+    
+    if (preg_match('/Attraction.*?Total[\s\|]*:?\s*([\d,]+(?:\.\d+)?)\s*USD/is', $text, $match)) {
+        $total = floatval(str_replace(',', '', $match[1]));
+        Log::info("Attraction total found (alt): " . $total);
+        return $total > 0 ? $total : 0;
+    }
+    
+    return 0;
+}
     
     /**
      * Extract Tour Transfers total - only if non-zero
      */
-    private function extractTourTransfersTotalFromEmail($text)
-    {
-        if (!preg_match('/Tour Transfers/i', $text)) return 0;
-        
-        if (preg_match('/Tour Transfers.*?Total\s*\|\s*([\d,]+(?:\.\d+)?)\s*USD/is', $text, $match)) {
-            $total = floatval(str_replace(',', '', $match[1]));
-            if ($total > 0) return $total;
-        }
-        
-        if (preg_match('/Tour Transfers.*?Total\s*:?\s*([\d,]+(?:\.\d+)?)\s*USD/is', $text, $match)) {
-            return floatval(str_replace(',', '', $match[1]));
-        }
-        
-        return 0;
+/**
+ * Extract Tour Transfers total - ONLY return > 0
+ */
+private function extractTourTransfersTotalFromEmail($text)
+{
+    if (!preg_match('/Tour Transfers/i', $text)) return 0;
+    
+    // Look for Total at the bottom of Tour Transfers table
+    if (preg_match('/Tour Transfers.*?Total\s*\|\s*([\d,]+(?:\.\d+)?)\s*USD/is', $text, $match)) {
+        $total = floatval(str_replace(',', '', $match[1]));
+        Log::info("Tour Transfers total found: " . $total);
+        return $total > 0 ? $total : 0;
     }
+    
+    if (preg_match('/Tour Transfers.*?Total\s*:?\s*([\d,]+(?:\.\d+)?)\s*USD/is', $text, $match)) {
+        $total = floatval(str_replace(',', '', $match[1]));
+        Log::info("Tour Transfers total found (alt): " . $total);
+        return $total > 0 ? $total : 0;
+    }
+    
+    return 0;
+}
     
     /**
      * Extract Meals total - only if non-zero
      */
-    private function extractMealsTotalFromEmail($text)
-    {
-        if (!preg_match('/Meals/i', $text)) return 0;
-        
-        if (preg_match('/Meals.*?Total\s*\|\s*([\d,]+(?:\.\d+)?)\s*USD/is', $text, $match)) {
-            $total = floatval(str_replace(',', '', $match[1]));
-            if ($total > 0) return $total;
-        }
-        
-        if (preg_match('/Meals.*?Total\s*:?\s*([\d,]+(?:\.\d+)?)\s*USD/is', $text, $match)) {
-            return floatval(str_replace(',', '', $match[1]));
-        }
-        
-        return 0;
+/**
+ * Extract Meals total - ONLY return > 0
+ */
+private function extractMealsTotalFromEmail($text)
+{
+    if (!preg_match('/Meals/i', $text)) return 0;
+    
+    if (preg_match('/Meals.*?Total\s*\|\s*([\d,]+(?:\.\d+)?)\s*USD/is', $text, $match)) {
+        $total = floatval(str_replace(',', '', $match[1]));
+        Log::info("Meals total found: " . $total);
+        return $total > 0 ? $total : 0;
     }
+    
+    if (preg_match('/Meals.*?Total\s*:?\s*([\d,]+(?:\.\d+)?)\s*USD/is', $text, $match)) {
+        $total = floatval(str_replace(',', '', $match[1]));
+        Log::info("Meals total found (alt): " . $total);
+        return $total > 0 ? $total : 0;
+    }
+    
+    return 0;
+}
 }

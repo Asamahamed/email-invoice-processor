@@ -86,7 +86,7 @@
                     <div class="input-group">
                         <span class="input-group-text"><i class="fas fa-search"></i></span>
                         <input type="text" name="search" class="form-control form-control-pnl" 
-                            placeholder="Vendor, Invoice, IS number..." value="{{ request('search') }}">
+                            placeholder="Vendor, Invoice..." value="{{ request('search') }}">
                     </div>
                 </div>
                 <div class="col-md-2">

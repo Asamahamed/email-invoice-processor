@@ -17,6 +17,7 @@ Route::get('/invoice/download/{id}', [InvoiceController::class, 'downloadInvoice
 Route::get('/email/view', [InvoiceController::class, 'viewEmail'])->name('email.view');
 
 // ========== PNL ROUTES ==========
+// ========== PNL ROUTES ==========
 Route::prefix('pnl')->name('pnl.')->group(function () {
     Route::get('/', [PnlController::class, 'index'])->name('index');
     Route::post('/fetch', [PnlController::class, 'fetchEmails'])->name('fetch');
@@ -24,9 +25,11 @@ Route::prefix('pnl')->name('pnl.')->group(function () {
     Route::post('/mark-read/{id}', [PnlController::class, 'markAsRead'])->name('mark-read');
     Route::get('/view-email/{id}', [PnlController::class, 'viewEmail'])->name('view-email');
     Route::get('/items/{id}', [PnlController::class, 'viewItems'])->name('items');
-    Route::get('/export', [PnlController::class, 'exportToExcel'])->name('export');
+    Route::get('/export', [PnlController::class, 'exportToExcel'])->name('export');  // Overall Export
+    Route::get('/export-country/{country}', [PnlController::class, 'exportByCountry'])->name('export-country');  // Country-based Export
     Route::post('/update-excel', [PnlController::class, 'updateExcel'])->name('update-excel');
     Route::get('/view-excel/{country}', [PnlController::class, 'viewExcel'])->name('view-excel');
+    Route::get('/export-country-approved/{country}', [PnlController::class, 'exportByCountryApproved'])->name('export-country-approved');
 });
 
 Route::get('/test-mail', function () {
