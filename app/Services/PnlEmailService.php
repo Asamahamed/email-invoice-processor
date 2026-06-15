@@ -144,12 +144,22 @@ Log::info("HTML Preview: " . substr($htmlBody, 0, 1000));
             }
             
             // Extract Total Tour Cost
-            $totalTourCost = 0;
-            if (preg_match('/Total Tour Cost\s*:?\s*([\d,]+(?:\.\d+)?)\s*USD/i', $plainText, $match)) {
-                $totalTourCost = floatval(str_replace(',', '', $match[1]));
-                Log::info("Total Tour Cost: " . $totalTourCost);
-            }
-            
+           $totalTourCost = 0;
+if (preg_match('/Total Tour Cost\s*:?\s*([\d,]+(?:\.\d+)?)\s*USD/i', $plainText, $match)) {
+    $totalTourCost = floatval(str_replace(',', '', $match[1]));
+    Log::info("Total Tour Cost: " . $totalTourCost);
+}
+ $profitLoss = $this->extractProfitLossFromEmail($htmlBody); // Use HTML, not plain text!
+        if ($profitLoss === null) {
+            // Fallback to plain text
+            $profitLoss = $this->extractProfitLossFromEmail($plainText);
+        }
+        
+        if ($profitLoss !== null) {
+            Log::info("Profit/Loss extracted: " . $profitLoss);
+        } else {
+            Log::info("No Profit/Loss found in email");
+        }
             // ========== EXTRACT ONLY CATEGORIES WITH VALUES ==========
             $categoriesFound = [];
             $pnlItemsToSave = [];
@@ -157,6 +167,8 @@ Log::info("HTML Preview: " . substr($htmlBody, 0, 1000));
             // 1. Hotels/Cruises (FIXED)
            // 1. Hotels/Cruises (FIXED)
 // 1. Hotels/Cruises (FIXED)
+// Extract Profit/Loss
+
 if (preg_match('/Hotels\/Cruises/i', $plainText)) {
     Log::info("=" . str_repeat("=", 50));
     Log::info("HOTELS/CRUISES SECTION DETECTED");
@@ -293,7 +305,7 @@ if (preg_match('/Hotels\/Cruises/i', $plainText)) {
             
             $exchangeRate = $this->exchangeRates[$countryCode] ?? 25500;
             $tourRef = $tourNumber ? $tourNumber . 'CNTL' : null;
-            
+            Log::info('Profit Loss Value: ' . $profitLoss);
             // ========== CREATE MAIN RECORD ==========
             $record = PnlRecord::create([
                 'sno' => $sno,
@@ -309,6 +321,7 @@ if (preg_match('/Hotels\/Cruises/i', $plainText)) {
                 'invoice_number' => $isNumber,
                 'is_number' => $isNumber,
                 'amount' => $totalTourCost,
+                'profit_loss' => $profitLoss,
                 'currency' => 'USD',
                 'country_code' => $countryCode,
                 'exchange_rate_used' => $exchangeRate,
@@ -637,7 +650,73 @@ private function extractTourTransfersTotalFromEmail($text)
     
     return 0;
 }
+    /**
+ * Extract Profit/Loss from email
+ */
+/**
+ * Extract Profit/Loss from email
+ */
+/**
+ * Extract Profit/Loss from email
+ */
+/**
+ * Extract Profit/Loss from email
+ */
+/**
+ * Extract Profit/Loss from email
+ */
+private function extractProfitLossFromEmail($text)
+{
+    // Debug: Log what we're searching
+    Log::info("Searching for Profit/Loss in text...");
     
+    // Try multiple patterns - order matters from most specific to least specific
+    
+    // Pattern 1: Pipe table format | Profit/Loss | 14.28 USD |
+    if (preg_match('/Profit\/Loss\s*\|\s*([\d,]+(?:\.\d+)?)\s*USD/i', $text, $match)) {
+        $profitLoss = floatval(str_replace(',', '', $match[1]));
+        Log::info("✅ Profit/Loss found (pipe table): " . $profitLoss);
+        return $profitLoss;
+    }
+    
+    // Pattern 2: HTML table with Profit/Loss in one cell and value in next cell
+    if (preg_match('/Profit\/Loss<\/t[dh]>.*?<t[dh][^>]*>([\d,]+(?:\.\d+)?)\s*USD/i', $text, $match)) {
+        $profitLoss = floatval(str_replace(',', '', $match[1]));
+        Log::info("✅ Profit/Loss found (HTML table): " . $profitLoss);
+        return $profitLoss;
+    }
+    
+    // Pattern 3: Bold/number format | **Profit/Loss** | **14.28** USD
+    if (preg_match('/Profit\/Loss.*?\*\*([\d,]+(?:\.\d+)?)\*\*\s*USD/i', $text, $match)) {
+        $profitLoss = floatval(str_replace(',', '', $match[1]));
+        Log::info("✅ Profit/Loss found (bold format): " . $profitLoss);
+        return $profitLoss;
+    }
+    
+    // Pattern 4: Simple "Profit/Loss 14.28 USD" (spaces)
+    if (preg_match('/Profit\/Loss\s+([\d,]+(?:\.\d+)?)\s*USD/i', $text, $match)) {
+        $profitLoss = floatval(str_replace(',', '', $match[1]));
+        Log::info("✅ Profit/Loss found (space separated): " . $profitLoss);
+        return $profitLoss;
+    }
+    
+    // Pattern 5: "Profit/Loss: 14.28 USD" (with colon)
+    if (preg_match('/Profit\/Loss\s*:\s*([\d,]+(?:\.\d+)?)\s*USD/i', $text, $match)) {
+        $profitLoss = floatval(str_replace(',', '', $match[1]));
+        Log::info("✅ Profit/Loss found (with colon): " . $profitLoss);
+        return $profitLoss;
+    }
+    
+    // Pattern 6: Any number after Profit/Loss within 50 characters
+    if (preg_match('/Profit\/Loss.{0,50}?([\d,]+(?:\.\d+)?)\s*USD/i', $text, $match)) {
+        $profitLoss = floatval(str_replace(',', '', $match[1]));
+        Log::info("✅ Profit/Loss found (flexible): " . $profitLoss);
+        return $profitLoss;
+    }
+    
+    Log::info("❌ No Profit/Loss pattern matched");
+    return null;
+}
     /**
      * Extract Meals total - only if non-zero
      */
