@@ -11,7 +11,7 @@ class InvoiceGenerationService
 {
     private $revisionCounters = [];
 
-    public function generateFromEmail($email, $classification = null, $revisionNumber = null)
+   public function generateFromEmail($email, $classification = null, $revisionNumber = null, $gstNumber = null, $salesPerson = null)
     {
         if (!$classification) {
             $agentClassifier = new AgentClassificationService();
@@ -89,7 +89,9 @@ class InvoiceGenerationService
                 'cgst_amount' => $cgst,
                 'sgst_percent' => $sgstPercent,
                 'sgst_amount' => $sgst,
-                'final_total_inr' => $finalGrandTotal
+                'final_total_inr' => $finalGrandTotal,
+                'gst_number' => $gstNumber,
+'sales_person' => $salesPerson,
             ];
         }
         
@@ -116,6 +118,8 @@ class InvoiceGenerationService
             'revision_number' => $revisionNumber ?? ($existingInvoice ? $existingInvoice->revision_number + 1 : 0),
             'original_invoice_number' => $baseInvoiceNumber,
             'is_revision' => $isRevision,
+              'gst_number' => $gstNumber,          // ✅ Add this
+    'sales_person' => $salesPerson, 
         ]);
         
         // Generate PDF based on invoice format
@@ -447,18 +451,21 @@ protected function getInvoiceNumberWithRevision($baseNumber, $revisionNumber = n
                 
                 <!-- NO separate Address: section here - removed duplicate -->
                 
-                <table class="invoice-details">
-                    <tr><td class="label">Invoice No.:</td><td><strong>' . $invoice->invoice_number . '</strong></td>
-                        <td class="label">Date:</td><td>' . date('d/m/Y', strtotime($invoice->invoice_date)) . '</td>
-                    </tr>
-                    <tr><td class="label">Ref ID:</td><td>' . htmlspecialchars($email->tour_ref ?? '-') . '</td>
-                        <td class="label">Agent ID:</td><td>' . htmlspecialchars($email->reference_no ?? '-') . '</td>
-                    </tr>
-                    <tr><td class="label">File Handler:</td><td>' . strtoupper($fileHandler) . '</td>
-                        <td class="label">Guest Name:</td><td>' . htmlspecialchars($email->guest_name ?? '-') . '</td>
-                    </tr>
-                </table>
-                
+              <table class="invoice-details">
+    <tr><td class="label">Invoice No.:</td><td><strong>' . $invoice->invoice_number . '</strong></td>
+        <td class="label">Date:</td><td>' . date('d/m/Y', strtotime($invoice->invoice_date)) . '</td>
+    </tr>
+    <tr><td class="label">Ref ID:</td><td>' . htmlspecialchars($email->tour_ref ?? '-') . '</td>
+        <td class="label">Agent ID:</td><td>' . htmlspecialchars($email->reference_no ?? '-') . '</td>
+    </tr>
+    <tr><td class="label">File Handler:</td><td>' . strtoupper($fileHandler) . '</td>
+        <td class="label">Guest Name:</td><td>' . htmlspecialchars($email->guest_name ?? '-') . '</td>
+    </tr>
+    <!-- NEW ROWS -->
+    <tr><td class="label">GST No.:</td><td>' . ($invoice->gst_number ?: 'NA') . '</td>
+        <td class="label">Sales Person:</td><td>' . ($invoice->sales_person ?: 'NA') . '</td>
+    </tr>
+</table>
                 <table class="items-table">
                     <thead><tr><th>Particulars</th><th>UNIT FARE</th><th>DISC %</th><th>QTY.</th><th class="amount">AMOUNT</th></tr></thead>
                     <tbody>
@@ -664,16 +671,20 @@ protected function getInvoiceNumberWithRevision($baseNumber, $revisionNumber = n
                 
                 <!-- NO separate Address: section here -->
                 
-                <table class="info-table">
-                    <tr><td class="info-label">Invoice No.:</td><td><strong>' . $invoice->invoice_number . '</strong></td>
-                        <td class="info-label">Ref ID.:</td><td>' . htmlspecialchars($email->tour_ref ?? '-') . '</td></tr>
-                    <tr><td class="info-label">File Handler:</td><td>' . strtoupper($fileHandler) . '</td>
-                        <td class="info-label">Sales Person:</td><td>' . strtoupper($salesId) . '</td></tr>
-                    <tr><td class="info-label">Date:</td><td>' . date('d/m/Y', strtotime($invoice->invoice_date)) . '</td>
-                        <td class="info-label">Agent ID:</td><td>' . htmlspecialchars($email->reference_no ?? '-') . '</td></tr>
-                    <tr><td class="info-label">GST NO.:</td><td>33AAECT8475B1ZD</td>
-                        <td class="info-label">Guest Name:</td><td>' . htmlspecialchars($email->guest_name ?? '-') . '</td></tr>
-                </table>
+               <table class="info-table">
+    <tr><td class="info-label">Invoice No.:</td><td><strong>' . $invoice->invoice_number . '</strong></td>
+        <td class="info-label">Ref ID.:</td><td>' . htmlspecialchars($email->tour_ref ?? '-') . '</td>
+    </tr>
+    <tr><td class="info-label">File Handler:</td><td>' . strtoupper($fileHandler) . '</td>
+        <td class="info-label">Sales Person:</td><td>' . strtoupper($invoice->sales_person ?? $salesId) . '</td>
+    </tr>
+    <tr><td class="info-label">Date:</td><td>' . date('d/m/Y', strtotime($invoice->invoice_date)) . '</td>
+        <td class="info-label">Agent ID:</td><td>' . htmlspecialchars($email->reference_no ?? '-') . '</td>
+    </tr>
+    <tr><td class="info-label">GST NO.:</td><td>' . ($invoice->gst_number ?: 'NA') . '</td>
+        <td class="info-label">Guest Name:</td><td>' . htmlspecialchars($email->guest_name ?? '-') . '</td>
+    </tr>
+</table>
                 
                 <table class="items-table">
                     <thead><tr><th>Particulars</th><th>Unit Fare</th><th>Discount</th><th>Qty</th><th class="amount">Amount</th></tr></thead>
@@ -752,7 +763,7 @@ protected function getInvoiceNumberWithRevision($baseNumber, $revisionNumber = n
     /**
      * Regenerate existing invoice with updated data and revision number
      */
-    public function regenerateInvoice($email, $existingInvoice, $revisionNumber = null)
+   public function regenerateInvoice($email, $existingInvoice, $revisionNumber = null, $gstNumber = null, $salesPerson = null)
     {
         // Get classification
         $agentClassifier = new AgentClassificationService();
@@ -829,7 +840,9 @@ protected function getInvoiceNumberWithRevision($baseNumber, $revisionNumber = n
                 'cgst_amount' => $cgst,
                 'sgst_percent' => $sgstPercent,
                 'sgst_amount' => $sgst,
-                'final_total_inr' => $finalGrandTotal
+                'final_total_inr' => $finalGrandTotal,
+                'gst_number' => $gstNumber,
+'sales_person' => $salesPerson,
             ];
         }
         
@@ -849,6 +862,8 @@ protected function getInvoiceNumberWithRevision($baseNumber, $revisionNumber = n
             'revision_number' => $revisionNumber,
             'is_revision' => true,
             'updated_at' => now(),
+             'gst_number' => $gstNumber ?? $existingInvoice->gst_number,
+    'sales_person' => $salesPerson ?? $existingInvoice->sales_person,
         ]);
         
         // Generate PDF based on invoice format

@@ -15,7 +15,7 @@ Route::post('/regenerate-invoice', [InvoiceController::class, 'regenerateInvoice
 Route::get('/invoice/view/{id}', [InvoiceController::class, 'viewInvoice'])->name('invoice.view');
 Route::get('/invoice/download/{id}', [InvoiceController::class, 'downloadInvoice'])->name('invoice.download');
 Route::get('/email/view', [InvoiceController::class, 'viewEmail'])->name('email.view');
-
+Route::get('/get-invoice-details', [InvoiceController::class, 'getInvoiceDetails'])->name('get.invoice.details');
 // ========== PNL ROUTES ==========
 // ========== PNL ROUTES ==========
 Route::prefix('pnl')->name('pnl.')->group(function () {

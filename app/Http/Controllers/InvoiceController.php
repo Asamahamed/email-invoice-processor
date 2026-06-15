@@ -161,14 +161,23 @@ public function nonCredit(Request $request)
     
 public function generateAndViewInvoice(Request $request)
 {
-    $request->validate(['email_id' => 'required|exists:incoming_emails,id']);
+    $request->validate([
+        'email_id' => 'required|exists:incoming_emails,id',
+        'gst_number' => 'nullable|string|max:100',
+        'sales_person' => 'nullable|string|max:255',
+    ]);
+
     $email = IncomingEmail::findOrFail($request->email_id);
     
     try {
-        // REMOVED: Both duplicate checks - Allow multiple invoices from same email
-        
         $invoiceService = new InvoiceGenerationService();
-        $invoice = $invoiceService->generateFromEmail($email);
+        $invoice = $invoiceService->generateFromEmail(
+            $email,
+            null,
+            null,
+            $request->gst_number,
+            $request->sales_person
+        );
         $email->update(['processing_status' => 'invoice_generated']);
         
         return response()->json([
@@ -176,68 +185,80 @@ public function generateAndViewInvoice(Request $request)
             'invoice_id' => $invoice->id,
             'message' => '✅ Invoice generated successfully!'
         ]);
-        
     } catch (\Exception $e) {
         \Log::error('Invoice generation failed: ' . $e->getMessage());
-        
-        if (str_contains($e->getMessage(), 'Duplicate entry') || str_contains($e->getMessage(), '1062')) {
-            return response()->json([
-                'success' => false,
-                'message' => '❌ Database duplicate error. Please check manually.'
-            ], 409);
-        }
-        
         return response()->json([
             'success' => false,
             'message' => '❌ Failed to generate invoice: ' . $e->getMessage()
         ], 500);
     }
 }
+   public function getInvoiceDetails(Request $request)
+{
+    $request->validate([
+        'email_id' => 'required|exists:incoming_emails,id'
+    ]);
     
+    $invoice = GeneratedInvoice::where('email_id', $request->email_id)->first();
+    
+    if (!$invoice) {
+        return response()->json([
+            'success' => false,
+            'message' => 'No invoice found for this email'
+        ]);
+    }
+    
+    return response()->json([
+        'success' => true,
+        'gst_number' => $invoice->gst_number,
+        'sales_person' => $invoice->sales_person
+    ]);
+} 
 public function regenerateInvoice(Request $request)
 {
-    $request->validate(['email_id' => 'required|exists:incoming_emails,id']);
+    $request->validate([
+        'email_id' => 'required|exists:incoming_emails,id',
+        'gst_number' => 'nullable|string|max:100',
+        'sales_person' => 'nullable|string|max:255',
+    ]);
+    
     $email = IncomingEmail::findOrFail($request->email_id);
     
     try {
         $existingInvoice = GeneratedInvoice::where('email_id', $email->id)->first();
         
         if (!$existingInvoice) {
-            // If no invoice exists, just generate a new one
             $invoiceService = new InvoiceGenerationService();
-            $invoice = $invoiceService->generateFromEmail($email);
-            $email->update(['processing_status' => 'invoice_generated']);
-            
-            return response()->json([
-                'success' => true,
-                'invoice_id' => $invoice->id,
-                'message' => '✅ Invoice generated successfully!'
-            ]);
+            $invoice = $invoiceService->generateFromEmail(
+                $email, 
+                null, 
+                null, 
+                $request->gst_number, 
+                $request->sales_person
+            );
+        } else {
+            $invoiceService = new InvoiceGenerationService();
+            $invoice = $invoiceService->regenerateInvoice(
+                $email, 
+                $existingInvoice, 
+                null, 
+                $request->gst_number, 
+                $request->sales_person
+            );
         }
         
-        // Delete old PDF
-        $oldPath = storage_path("app/public/{$existingInvoice->file_path}");
-        if (file_exists($oldPath)) {
-            unlink($oldPath);
-        }
-        
-        // Regenerate
-        $invoiceService = new InvoiceGenerationService();
-        $invoice = $invoiceService->regenerateInvoice($email, $existingInvoice);
         $email->update(['processing_status' => 'invoice_generated']);
         
         return response()->json([
             'success' => true,
             'invoice_id' => $invoice->id,
-            'message' => '✅ Invoice regenerated successfully!'
+            'message' => '✅ Invoice processed successfully!'
         ]);
-        
     } catch (\Exception $e) {
-        \Log::error('Invoice regeneration failed: ' . $e->getMessage());
-        
+        \Log::error('Invoice processing failed: ' . $e->getMessage());
         return response()->json([
             'success' => false,
-            'message' => '❌ Failed to regenerate invoice: ' . $e->getMessage()
+            'message' => '❌ Failed: ' . $e->getMessage()
         ], 500);
     }
 }
@@ -309,5 +330,26 @@ public function generateRevisedInvoice(Request $request)
             'message' => '❌ Failed to generate invoice: ' . $e->getMessage()
         ], 500);
     }
+}
+
+public function generateAndView(Request $request)
+{
+    $request->validate([
+        'email_id' => 'required|exists:emails,id',
+        'gst_number' => 'nullable|string|max:100',
+        'sales_person' => 'nullable|string|max:255',
+    ]);
+
+    $email = Email::findOrFail($request->email_id);
+    $service = new InvoiceGenerationService();
+    $invoice = $service->generateFromEmail(
+        $email,
+        null,
+        null,
+        $request->gst_number,
+        $request->sales_person
+    );
+
+    return response()->json(['success' => true, 'invoice_id' => $invoice->id]);
 }
 }

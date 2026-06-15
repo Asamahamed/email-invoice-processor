@@ -26,7 +26,9 @@ class GeneratedInvoice extends Model
         'invoice_type',
         'status',
         'file_path',
-        'calculations'
+        'calculations',
+         'gst_number',
+    'sales_person',
     ];
 
     protected $casts = [
