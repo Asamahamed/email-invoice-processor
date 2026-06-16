@@ -48,53 +48,209 @@ class MicrosoftGraphService
     }
     
     public function fetchAllEmails()
-    {
-        try {
+{
+    try {
+        set_time_limit(600);
+        
+        $allMessages = [];
+        $nextLink = null;
+        $pageCount = 0;
+        $maxPages = 10; // Maximum pages to fetch
+        
+        $baseUrl = 'https://graph.microsoft.com/v1.0/users/' . env('GRAPH_INVOICE_USER') . '/messages';
+        
+        Log::info("🚀 Starting to fetch emails...");
+        
+        do {
+            // If we have a nextLink, use it as-is (don't add extra params)
+            // Microsoft Graph nextLink already contains all parameters
+            $url = $nextLink ?? $baseUrl . '?' . http_build_query([
+                '$top' => 50,
+                '$orderby' => 'receivedDateTime desc',
+                '$select' => 'id,subject,bodyPreview,from,receivedDateTime,isRead,hasAttachments',
+            ]);
+            
+            Log::info("📡 Requesting URL: " . substr($url, 0, 200) . "...");
+            
             $response = Http::withToken($this->accessToken)
-                ->get('https://graph.microsoft.com/v1.0/users/' . env('GRAPH_INVOICE_USER') . '/messages', [
-                    '$top' => 100,
-                    '$orderby' => 'receivedDateTime desc',
-                    '$select' => 'id,subject,body,bodyPreview,from,receivedDateTime,isRead,hasAttachments',
-                    '$expand' => 'attachments'
-                ]);
+                ->timeout(180)
+                ->get($url);
             
             if (!$response->ok()) {
-                Log::error('Failed to fetch emails: ' . $response->body());
-                return 0;
+                Log::error('Failed to fetch emails page: ' . $response->body());
+                break;
             }
             
-            $messages = $response->json()['value'] ?? [];
-            Log::info("📥 Fetched " . count($messages) . " emails from mailbox");
+            $data = $response->json();
+            $messages = $data['value'] ?? [];
             
-            $newCount = 0;
+            // If no messages, break
+            if (empty($messages)) {
+                Log::info("No more messages to fetch");
+                break;
+            }
             
-            foreach ($messages as $message) {
-                $subject = $message['subject'] ?? 'NO SUBJECT';
-                Log::info("Processing: " . $subject);
-                
-                $existing = IncomingEmail::where('message_id', $message['id'])->first();
-                
-                if ($existing) {
-                    $readStatus = isset($message['isRead']) ? ($message['isRead'] ? 'read' : 'unread') : 'unread';
-                    if ($existing->read_status !== $readStatus) {
-                        $existing->update(['read_status' => $readStatus]);
-                        Log::info("Updated read status for: " . $subject);
-                    }
-                } else {
-                    $saved = $this->saveEmail($message);
+            $allMessages = array_merge($allMessages, $messages);
+            
+            // Get next page link
+            $nextLink = $data['@odata.nextLink'] ?? null;
+            $pageCount++;
+            
+            Log::info("📥 Page {$pageCount}: " . count($messages) . " emails (Total so far: " . count($allMessages) . ")");
+            
+            // Stop if we've reached max pages
+            if ($pageCount >= $maxPages) {
+                Log::warning("Reached maximum page limit ({$maxPages} pages)");
+                break;
+            }
+            
+            // If nextLink is null, we're done
+            if (!$nextLink) {
+                Log::info("✅ No more pages to fetch");
+                break;
+            }
+            
+            // Small delay between requests
+            usleep(200000);
+            
+        } while ($nextLink);
+        
+        Log::info("📥 TOTAL emails fetched: " . count($allMessages));
+        
+        // Process each message
+        $newCount = 0;
+        $processedCount = 0;
+        $totalMessages = count($allMessages);
+        
+        foreach ($allMessages as $message) {
+            $processedCount++;
+            $subject = $message['subject'] ?? 'NO SUBJECT';
+            
+            if ($processedCount % 50 == 0) {
+                Log::info("⏳ Processing {$processedCount}/{$totalMessages} emails...");
+            }
+            
+            $existing = IncomingEmail::where('message_id', $message['id'])->first();
+            
+            if ($existing) {
+                $readStatus = isset($message['isRead']) ? ($message['isRead'] ? 'read' : 'unread') : 'unread';
+                if ($existing->read_status !== $readStatus) {
+                    $existing->update(['read_status' => $readStatus]);
+                    Log::info("📬 Updated read status for: " . $subject);
+                }
+            } else {
+                // Fetch full message for new emails
+                $fullMessage = $this->fetchFullMessage($message['id']);
+                if ($fullMessage) {
+                    $saved = $this->saveEmail($fullMessage);
                     if ($saved) {
                         $newCount++;
                         Log::info("✅ Saved new email: " . $subject);
                     }
+                } else {
+                    // Fallback: save with preview
+                    $saved = $this->saveEmailWithPreview($message);
+                    if ($saved) {
+                        $newCount++;
+                        Log::info("✅ Saved new email (preview): " . $subject);
+                    }
                 }
             }
+        }
+        
+        Log::info("📊 Summary: {$newCount} new emails saved out of {$totalMessages} total emails");
+        return $newCount;
+        
+    } catch (\Exception $e) {
+        Log::error('Error fetching emails: ' . $e->getMessage());
+        return 0;
+    }
+}
+    
+    /**
+     * Fetch full message with body and attachments
+     */
+    protected function fetchFullMessage($messageId)
+    {
+        try {
+            $response = Http::withToken($this->accessToken)
+                ->timeout(60)
+                ->get('https://graph.microsoft.com/v1.0/users/' . env('GRAPH_INVOICE_USER') . '/messages/' . $messageId, [
+                    '$select' => 'id,subject,body,bodyPreview,from,receivedDateTime,isRead,hasAttachments',
+                    '$expand' => 'attachments($top=5)' // Limit attachments
+                ]);
             
-            Log::info("📊 Summary: {$newCount} new emails saved");
-            return $newCount;
+            if ($response->ok()) {
+                return $response->json();
+            }
+        } catch (\Exception $e) {
+            Log::error("Failed to fetch full message {$messageId}: " . $e->getMessage());
+        }
+        
+        return null;
+    }
+    
+    /**
+     * Save email with preview only (fallback)
+     */
+    protected function saveEmailWithPreview($message)
+    {
+        try {
+            $subject = $message['subject'] ?? 'No Subject';
+            $htmlBody = $message['bodyPreview'] ?? '';
+            $plainText = $htmlBody;
+            
+            $fromEmail = $message['from']['emailAddress']['address'] ?? '';
+            $fromName = $message['from']['emailAddress']['name'] ?? '';
+            $receivedAt = Carbon::parse($message['receivedDateTime']);
+            $readStatus = isset($message['isRead']) ? ($message['isRead'] ? 'read' : 'unread') : 'unread';
+            
+            $isTourConfirmation = stripos($plainText, 'TOUR CONFIRMATION') !== false;
+            
+            // Extract invoice number from preview
+            $invoiceNumber = $this->extractInvoiceNumber($plainText);
+            $invoiceNumber = $this->cleanInvoiceNumber($invoiceNumber);
+            $tourRef = $this->extractTourReference($plainText);
+            
+            if (!$tourRef) $tourRef = "NA";
+            if (!$invoiceNumber) $invoiceNumber = "NA";
+            
+            $fileHandler = $this->extractField($plainText, 'File Handler');
+            $agentName = $this->extractField($plainText, 'Agent');
+            
+            if ($agentName) {
+                $agentName = preg_replace('/\s*[-–].*$/', '', $agentName);
+                $agentName = trim($agentName);
+            }
+            
+            $classification = $this->agentClassifier->classify($plainText, $fromEmail, $subject, $agentName);
+            
+            $emailData = [
+                'message_id' => $message['id'],
+                'from_email' => $fromEmail,
+                'from_name' => $fromName,
+                'subject' => $subject,
+                'body' => $htmlBody,
+                'body_preview' => substr($plainText, 0, 500),
+                'received_at' => $receivedAt,
+                'agent_name' => $agentName,
+                'tour_ref' => $tourRef,
+                'invoice_number' => $invoiceNumber,
+                'file_handler' => $fileHandler,
+                'credit_type' => $classification['credit_type'],
+                'classification_reason' => $classification['reason'],
+                'read_status' => $readStatus,
+                'processing_status' => 'processed',
+                'is_tour_confirmation' => $isTourConfirmation,
+                'has_attachments' => $message['hasAttachments'] ?? false,
+            ];
+            
+            IncomingEmail::create($emailData);
+            return true;
             
         } catch (\Exception $e) {
-            Log::error('Error fetching emails: ' . $e->getMessage());
-            return 0;
+            Log::error('Save preview failed: ' . $e->getMessage());
+            return false;
         }
     }
     
@@ -526,16 +682,7 @@ protected function htmlToPlainText($html)
     return $result;
 }
     
-/**
- * Extract field value from plain text - FIXED VERSION
- * Handles format: "Field Name: Value" or "Field Name\nValue"
- */
-/**
- * Extract field value from plain text - IMPROVED for TOUR CONFIRMATION
- */
-/**
- * Extract field value from plain text - FIXED for your email format
- */
+
 protected function extractField($text, $fieldName)
 {
     // First, try to find the TOUR CONFIRMATION section
@@ -545,45 +692,53 @@ protected function extractField($text, $fieldName)
         Log::info("Found TOUR CONFIRMATION section for {$fieldName}");
     }
     
-    // Search in TOUR CONFIRMATION section first if available
     $searchText = !empty($tourConfirmationSection) ? $tourConfirmationSection : $text;
     
     // Clean the text - remove special Unicode characters
     $searchText = preg_replace('/[^\x20-\x7E\x0A\x0D]/u', ' ', $searchText);
     
-    // Pattern 1: Field Name followed by newline then value (most common)
-    // Example: "File Handler\nSajid" or "File Handler \n Sajid"
+    // ========== NEW: Match lines that start with the field name ==========
+    // Example: "Agent Al Mousim Travel & Tours, Co. Ltd" or "Agent: Al Mousim ..."
+    // Use multiline flag to match start of line
+    $pattern = '/^' . preg_quote($fieldName, '/') . '\s*:?\s*(.+)$/im';
+    if (preg_match($pattern, $searchText, $match)) {
+        $value = trim($match[1]);
+        // Skip if the value looks like another field name (to avoid mis-matching)
+        if (!empty($value) && strlen($value) < 200 && !preg_match('/^(Tour Ref|Flight|Agent|Guests Name|IS Number|No\. of Guests|Meal Plan|Chauffeur)/i', $value)) {
+            Log::info("✓ Extracted {$fieldName} (line start): {$value}");
+            return $value;
+        }
+    }
+    
+    // ========== Existing Pattern 1: Field Name followed by newline then value ==========
     $pattern1 = '/' . preg_quote($fieldName, '/') . '\s*\n\s*([^\n]+)/i';
     if (preg_match($pattern1, $searchText, $match)) {
         $value = trim($match[1]);
         $value = preg_replace('/\s+/', ' ', $value);
-        if (!empty($value) && strlen($value) < 200) {
+        if (!empty($value) && strlen($value) < 200 && !preg_match('/^(Tour Ref|Flight|Agent|Guests Name|IS Number|No\. of Guests|Meal Plan)/i', $value)) {
             Log::info("✓ Extracted {$fieldName} (pattern1): {$value}");
             return $value;
         }
     }
     
-    // Pattern 2: Field Name followed by spaces then value (same line)
-    // Example: "File Handler Sajid" or "File Handler: Sajid"
+    // ========== Existing Pattern 2: Field Name followed by spaces then value (same line) ==========
     $pattern2 = '/' . preg_quote($fieldName, '/') . '\s*:?\s*([^\n]+)/i';
     if (preg_match($pattern2, $searchText, $match)) {
         $value = trim($match[1]);
         $value = preg_replace('/\s+/', ' ', $value);
-        // Skip if the value looks like another field name
-        if (!empty($value) && strlen($value) < 200 && !preg_match('/^(Tour Ref|Flight|Agent|Guests Name|IS Number)/i', $value)) {
+        if (!empty($value) && strlen($value) < 200 && !preg_match('/^(Tour Ref|Flight|Agent|Guests Name|IS Number|No\. of Guests|Meal Plan)/i', $value)) {
             Log::info("✓ Extracted {$fieldName} (pattern2): {$value}");
             return $value;
         }
     }
     
-    // Pattern 3: Look for exact line with field name
+    // ========== Existing Pattern 3: Check next line after the field name ==========
     $lines = explode("\n", $searchText);
     foreach ($lines as $i => $line) {
         if (preg_match('/' . preg_quote($fieldName, '/') . '/i', $line)) {
             // Check next line for value
             if (isset($lines[$i + 1])) {
                 $value = trim($lines[$i + 1]);
-                // Skip if the next line looks like another field or is empty
                 if (!empty($value) && !preg_match('/^(Emergency contact|Customer Support|Tour Ref|Flight|Agent|Guests Name|IS Number|No\. of Guests|Meal Plan)/i', $value)) {
                     Log::info("✓ Extracted {$fieldName} (pattern3 - next line): {$value}");
                     return $value;
@@ -592,7 +747,7 @@ protected function extractField($text, $fieldName)
             // Also check same line after removing the field name
             $value = preg_replace('/' . preg_quote($fieldName, '/') . '\s*/i', '', $line);
             $value = trim($value);
-            if (!empty($value) && strlen($value) < 200) {
+            if (!empty($value) && strlen($value) < 200 && !preg_match('/^(Tour Ref|Flight|Agent|Guests Name|IS Number|No\. of Guests|Meal Plan)/i', $value)) {
                 Log::info("✓ Extracted {$fieldName} (pattern3 - same line): {$value}");
                 return $value;
             }

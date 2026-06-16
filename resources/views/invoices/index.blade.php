@@ -97,18 +97,23 @@
                 </div>
 
                 <!-- Quick Action Buttons -->
-                <div class="row mb-4">
-                    <div class="col-12">
-                        <div class="d-flex gap-2 flex-wrap">
-                            <a href="{{ route('credit') }}" class="btn btn-accent">
-                                <i class="fas fa-credit-card me-1"></i> Credit Invoices
-                            </a>
-                            <a href="{{ route('non-credit') }}" class="btn btn-outline-primary">
-                                <i class="fas fa-file-alt me-1"></i> Non-Credit Invoices
-                            </a>
-                        </div>
-                    </div>
-                </div>
+              <!-- Quick Action Buttons -->
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="d-flex gap-2 flex-wrap">
+            <a href="{{ route('credit') }}" class="btn btn-accent">
+                <i class="fas fa-credit-card me-1"></i> Credit Invoices
+            </a>
+            <a href="{{ route('non-credit') }}" class="btn btn-outline-primary">
+                <i class="fas fa-file-alt me-1"></i> Non-Credit Invoices
+            </a>
+            <!-- Reports Button -->
+            <a href="{{ route('reports.index') }}" class="btn btn-info">
+                <i class="fas fa-chart-bar me-1"></i> Reports
+            </a>
+        </div>
+    </div>
+</div>
 
                 <!-- Filter Section -->
                 <div class="filter-section mb-4">
@@ -270,12 +275,8 @@
                                                     class="btn btn-secondary btn-sm">
                                                     <i class="fas fa-download"></i>
                                                 </a>
-                                                <button type="button"
-                                                    class="btn btn-warning btn-sm regenerate-invoice-btn"
-                                                    data-email-id="{{ $email->id }}" onclick="regenerateInvoice(this)"
-                                                    title="Regenerate (for amendments)">
-                                                    <i class="fas fa-sync-alt"></i> Regenerate
-                                                </button>
+                                                {{-- Remove this Revise button --}}
+                                                {{-- <button type="button" class="btn btn-warning btn-sm regenerate-invoice-btn" ...> --}}
                                             @endif
                                         </div>
                                     </td>
@@ -346,32 +347,7 @@
             </div>
         </div>
     </div>
-    <!-- GST / Sales Person Modal -->
-    <div class="modal fade" id="gstModal" tabindex="-1">
-        <div class="modal-dialog modal-dialog-centered">
-            <div class="modal-content">
-                <div class="modal-header">
-                    <h5 class="modal-title">Invoice Details</h5>
-                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-                </div>
-                <div class="modal-body">
-                    <div class="mb-3">
-                        <label class="form-label">GST Number (optional)</label>
-                        <input type="text" class="form-control" id="gstNumber" placeholder="Enter GST number">
-                    </div>
-                    <div class="mb-3">
-                        <label class="form-label">Sales Person Name (optional)</label>
-                        <input type="text" class="form-control" id="salesPerson"
-                            placeholder="Enter sales person name">
-                    </div>
-                </div>
-                <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Skip</button>
-                    <button type="button" class="btn btn-primary" id="confirmGenerateBtn">Generate Invoice</button>
-                </div>
-            </div>
-        </div>
-    </div>
+
     <style>
         /* Make rows clickable */
         .email-row {
@@ -462,220 +438,310 @@
         }
     </style>
 
-  @push('scripts')
-    <script>
-        $(document).ready(function() {
-            let currentEmailId = null;
+    @push('scripts')
+        <script>
+            $(document).ready(function() {
+                let currentEmailId = null;
 
-            // Click on email row to view full content
-            $('.email-row').click(function() {
-                const emailId = $(this).data('email-id');
-                currentEmailId = emailId;
+                // Click on email row to view full content
+                $('.email-row').click(function() {
+                    const emailId = $(this).data('email-id');
+                    currentEmailId = emailId;
 
-                $('#emailModal').modal('show');
-                $('#modalBody').html(
-                    '<div class="text-center py-5"><div class="spinner-border text-primary" role="status"><span class="visually-hidden">Loading...</span></div></div>'
-                );
+                    $('#emailModal').modal('show');
+                    $('#modalBody').html(
+                        '<div class="text-center py-5"><div class="spinner-border text-primary" role="status"><span class="visually-hidden">Loading...</span></div></div>'
+                    );
 
-                $.ajax({
-                    url: '{{ route('email.view') }}',
-                    method: 'GET',
-                    data: {
-                        id: emailId
-                    },
-                    success: function(response) {
-                        if (response.success) {
-                            $('#modalSubject').text(response.email.subject);
-                            let emailContent = response.email.body ||
-                                '<p>No content available</p>';
-
-                            $('#modalBody').html(`
-                                <div class="email-meta">
-                                    <p><strong>From:</strong> ${escapeHtml(response.email.from_name || '-')} &lt;${escapeHtml(response.email.from_email)}&gt;</p>
-                                    <p><strong>Received:</strong> ${response.email.received_at}</p>
-                                    <p><strong>Subject:</strong> ${escapeHtml(response.email.subject)}</p>
-                                    ${response.email.agent_name ? `<p><strong>Agent:</strong> ${escapeHtml(response.email.agent_name)}</p>` : ''}
-                                    ${response.email.invoice_number ? `<p><strong>Invoice No:</strong> ${escapeHtml(response.email.invoice_number)}</p>` : ''}
-                                    ${response.email.tour_ref ? `<p><strong>Tour Ref:</strong> ${escapeHtml(response.email.tour_ref)}</p>` : ''}
-                                </div>
-                                <div class="email-content">
-                                    ${emailContent}
-                                </div>
-                            `);
-                        }
-                    },
-                    error: function() {
-                        $('#modalBody').html(
-                            '<div class="alert alert-danger m-3">Failed to load email content</div>'
-                        );
-                    }
-                });
-            });
-
-            // FIXED: When clicking Generate Invoice inside email modal - show GST modal first
-            $('#modalGenerateBtn').off('click').on('click', function() {
-                if (currentEmailId) {
-                    // Close email modal
-                    $('#emailModal').modal('hide');
-                    // Set pending email ID
-                    pendingEmailId = currentEmailId;
-                    // Clear previous values
-                    $('#gstNumber').val('');
-                    $('#salesPerson').val('');
-                    // Show GST modal
-                    $('#gstModal').modal('show');
-                }
-            });
-
-            function escapeHtml(text) {
-                if (!text) return '';
-                return text.replace(/[&<>]/g, function(m) {
-                    if (m === '&') return '&amp;';
-                    if (m === '<') return '&lt;';
-                    if (m === '>') return '&gt;';
-                    return m;
-                });
-            }
-        });
-
-        let pendingEmailId = null;
-
-        // Generate button from table row - already working
-        function generateAndViewInvoice(button) {
-            pendingEmailId = $(button).data('email-id');
-            // Clear previous values
-            $('#gstNumber').val('');
-            $('#salesPerson').val('');
-            $('#gstModal').modal('show');
-        }
-
-        // Confirm generate from GST modal - works for both flows
-        $('#confirmGenerateBtn').off('click').on('click', function() {
-            if (!pendingEmailId) return;
-            
-            const gst = $('#gstNumber').val().trim();
-            const salesPerson = $('#salesPerson').val().trim();
-            
-            $('#gstModal').modal('hide');
-            
-            const $button = $(`.generate-invoice-btn[data-email-id="${pendingEmailId}"]`);
-            const originalHtml = $button.html();
-            if ($button.length) {
-                $button.prop('disabled', true).html('<i class="fas fa-spinner fa-spin"></i> Generating...');
-            }
-            
-            $.ajax({
-                url: '{{ route("generate.and.view.invoice") }}',
-                method: 'POST',
-                data: {
-                    email_id: pendingEmailId,
-                    gst_number: gst,
-                    sales_person: salesPerson,
-                    _token: '{{ csrf_token() }}'
-                },
-                dataType: 'json',
-                success: function(response) {
-                    if (response.success) {
-                        window.open('{{ url("/invoice/view") }}/' + response.invoice_id, '_blank');
-                        toastr.success('Invoice generated!');
-                        setTimeout(() => location.reload(), 1500);
-                    } else {
-                        toastr.error(response.message || 'Failed to generate invoice');
-                        if ($button.length) {
-                            $button.prop('disabled', false).html(originalHtml);
-                        }
-                    }
-                },
-                error: function(xhr) {
-                    let errorMsg = 'Error generating invoice';
-                    if (xhr.responseJSON && xhr.responseJSON.message) errorMsg = xhr.responseJSON.message;
-                    toastr.error(errorMsg);
-                    if ($button.length) {
-                        $button.prop('disabled', false).html(originalHtml);
-                    }
-                }
-            });
-        });
-
-       function regenerateInvoice(button) {
-    const emailId = $(button).data('email-id');
-    const originalHtml = $(button).html();
-    const $button = $(button);
-    
-    // First, fetch existing invoice details to get current GST and Sales Person
-    $.ajax({
-        url: '{{ route("get.invoice.details") }}',
-        method: 'GET',
-        data: {
-            email_id: emailId
-        },
-        dataType: 'json',
-        success: function(response) {
-            if (response.success) {
-                pendingEmailId = emailId;
-                
-                // Load existing values into modal
-                $('#gstNumber').val(response.gst_number || '');
-                $('#salesPerson').val(response.sales_person || '');
-                
-                // Store the button reference for later use
-                window.currentRegenerateButton = $button;
-                window.currentRegenerateOriginalHtml = originalHtml;
-                
-                // Show GST modal
-                $('#gstModal').modal('show');
-                
-                // Override confirm button temporarily for regenerate
-                $('#confirmGenerateBtn').off('click').one('click', function() {
-                    if (!pendingEmailId) return;
-                    
-                    const gst = $('#gstNumber').val().trim();
-                    const salesPerson = $('#salesPerson').val().trim();
-                    
-                    $('#gstModal').modal('hide');
-                    
-                    const $regenerateButton = window.currentRegenerateButton;
-                    const originalButtonHtml = window.currentRegenerateOriginalHtml;
-                    
-                    $regenerateButton.prop('disabled', true).html('<i class="fas fa-spinner fa-spin"></i> Regenerating...');
-                    
                     $.ajax({
-                        url: '{{ route("regenerate.invoice") }}',
-                        method: 'POST',
+                        url: '{{ route('email.view') }}',
+                        method: 'GET',
                         data: {
-                            email_id: pendingEmailId,
-                            gst_number: gst,
-                            sales_person: salesPerson,
-                            _token: '{{ csrf_token() }}'
+                            id: emailId
                         },
-                        dataType: 'json',
                         success: function(response) {
                             if (response.success) {
-                                window.open('{{ url("/invoice/view") }}/' + response.invoice_id, '_blank');
-                                toastr.success(response.message || 'Invoice regenerated successfully!');
-                                setTimeout(() => location.reload(), 2000);
-                            } else {
-                                toastr.error(response.message || 'Failed to regenerate invoice');
-                                $regenerateButton.prop('disabled', false).html(originalButtonHtml);
+                                $('#modalSubject').text(response.email.subject);
+                                let emailContent = response.email.body ||
+                                    '<p>No content available</p>';
+
+                                $('#modalBody').html(`
+                        <div class="email-meta">
+                            <p><strong>From:</strong> ${escapeHtml(response.email.from_name || '-')} &lt;${escapeHtml(response.email.from_email)}&gt;</p>
+                            <p><strong>Received:</strong> ${response.email.received_at}</p>
+                            <p><strong>Subject:</strong> ${escapeHtml(response.email.subject)}</p>
+                            ${response.email.agent_name ? `<p><strong>Agent:</strong> ${escapeHtml(response.email.agent_name)}</p>` : ''}
+                            ${response.email.invoice_number ? `<p><strong>Invoice No:</strong> ${escapeHtml(response.email.invoice_number)}</p>` : ''}
+                            ${response.email.tour_ref ? `<p><strong>Tour Ref:</strong> ${escapeHtml(response.email.tour_ref)}</p>` : ''}
+                            ${response.email.file_handler ? `<p><strong>Sales Person:</strong> ${escapeHtml(response.email.file_handler)}</p>` : ''}
+                        </div>
+                        <div class="email-content">
+                            ${emailContent}
+                        </div>
+                    `);
                             }
                         },
-                        error: function(xhr) {
-                            let errorMsg = 'Error regenerating invoice';
-                            if (xhr.responseJSON && xhr.responseJSON.message) errorMsg = xhr.responseJSON.message;
-                            toastr.error(errorMsg);
-                            $regenerateButton.prop('disabled', false).html(originalButtonHtml);
+                        error: function() {
+                            $('#modalBody').html(
+                                '<div class="alert alert-danger m-3">Failed to load email content</div>'
+                            );
                         }
                     });
                 });
-            } else {
-                toastr.error('Could not fetch invoice details');
+
+                // Generate invoice directly - NO MODAL
+                $('#modalGenerateBtn').off('click').on('click', function() {
+                    if (currentEmailId) {
+                        generateInvoice(currentEmailId);
+                    }
+                });
+
+                function escapeHtml(text) {
+                    if (!text) return '';
+                    return text.replace(/[&<>]/g, function(m) {
+                        if (m === '&') return '&amp;';
+                        if (m === '<') return '&lt;';
+                        if (m === '>') return '&gt;';
+                        return m;
+                    });
+                }
+            });
+
+            // Generate invoice from table row - DIRECT, NO MODAL
+            function generateAndViewInvoice(button) {
+                const emailId = $(button).data('email-id');
+                generateInvoice(emailId, button);
             }
-        },
-        error: function() {
-            toastr.error('Failed to load existing invoice details');
-        }
-    });
-}
-    </script>
-@endpush
+
+            function generateInvoice(emailId, button = null) {
+                const $button = button ? $(button) : null;
+                const originalHtml = $button ? $button.html() : '';
+
+                if ($button) {
+                    $button.prop('disabled', true).html('<i class="fas fa-spinner fa-spin"></i> Checking...');
+                }
+
+                // Get email details - both invoice_number and tour_ref
+                $.ajax({
+                    url: '{{ route('get.email.invoice.number') }}',
+                    method: 'GET',
+                    data: {
+                        email_id: emailId
+                    },
+                    dataType: 'json',
+                    success: function(emailResponse) {
+                        if (emailResponse.success) {
+                            const invoiceNumber = emailResponse.invoice_number;
+                            const tourRef = emailResponse.tour_ref;
+
+                            // Check by invoice_number AND tour_ref
+                            $.ajax({
+                                url: '{{ route('check.invoice.by.number') }}',
+                                method: 'GET',
+                                data: {
+                                    invoice_number: invoiceNumber,
+                                    tour_ref: tourRef
+                                },
+                                dataType: 'json',
+                                success: function(response) {
+                                    if (response.exists) {
+                                        // Create revision
+                                        if ($button) {
+                                            $button.html(
+                                                '<i class="fas fa-spinner fa-spin"></i> Creating Revision...'
+                                                );
+                                        }
+
+                                        $.ajax({
+                                            url: '{{ route('regenerate.invoice') }}',
+                                            method: 'POST',
+                                            data: {
+                                                email_id: emailId,
+                                                _token: '{{ csrf_token() }}'
+                                            },
+                                            dataType: 'json',
+                                            success: function(response) {
+                                                if (response.success) {
+                                                    window.open(
+                                                        '{{ url('/invoice/view') }}/' +
+                                                        response.invoice_id, '_blank');
+                                                    toastr.success('✅ Revision R' + response
+                                                        .revision_number + ' created!');
+                                                    setTimeout(() => location.reload(),
+                                                        1500);
+                                                } else {
+                                                    toastr.error(response.message ||
+                                                        'Failed to create revision');
+                                                    if ($button) $button.prop('disabled',
+                                                        false).html(originalHtml);
+                                                }
+                                            },
+                                            error: function(xhr) {
+                                                let errorMsg = 'Error creating revision';
+                                                if (xhr.responseJSON && xhr.responseJSON
+                                                    .message) errorMsg = xhr.responseJSON
+                                                    .message;
+                                                toastr.error(errorMsg);
+                                                if ($button) $button.prop('disabled', false)
+                                                    .html(originalHtml);
+                                            }
+                                        });
+                                    } else {
+                                        // No invoice exists - create new
+                                        if ($button) {
+                                            $button.html(
+                                                '<i class="fas fa-spinner fa-spin"></i> Generating...'
+                                                );
+                                        }
+
+                                        $.ajax({
+                                            url: '{{ route('generate.and.view.invoice') }}',
+                                            method: 'POST',
+                                            data: {
+                                                email_id: emailId,
+                                                _token: '{{ csrf_token() }}'
+                                            },
+                                            dataType: 'json',
+                                            success: function(response) {
+                                                if (response.success) {
+                                                    window.open(
+                                                        '{{ url('/invoice/view') }}/' +
+                                                        response.invoice_id, '_blank');
+                                                    toastr.success(
+                                                        '✅ Invoice generated with auto GST!'
+                                                        );
+                                                    setTimeout(() => location.reload(),
+                                                        1500);
+                                                } else {
+                                                    toastr.error(response.message ||
+                                                        'Failed to generate invoice');
+                                                    if ($button) $button.prop('disabled',
+                                                        false).html(originalHtml);
+                                                }
+                                            },
+                                            error: function(xhr) {
+                                                let errorMsg = 'Error generating invoice';
+                                                if (xhr.responseJSON && xhr.responseJSON
+                                                    .message) errorMsg = xhr.responseJSON
+                                                    .message;
+                                                toastr.error(errorMsg);
+                                                if ($button) $button.prop('disabled', false)
+                                                    .html(originalHtml);
+                                            }
+                                        });
+                                    }
+                                },
+                                error: function() {
+                                    toastr.error('Error checking invoice by number');
+                                    if ($button) $button.prop('disabled', false).html(originalHtml);
+                                }
+                            });
+                        } else {
+                            toastr.error('Could not get invoice number');
+                            if ($button) $button.prop('disabled', false).html(originalHtml);
+                        }
+                    },
+                    error: function() {
+                        toastr.error('Error fetching email details');
+                        if ($button) $button.prop('disabled', false).html(originalHtml);
+                    }
+                });
+            }
+
+
+            function regenerateInvoice(button) {
+                const emailId = $(button).data('email-id');
+                const originalHtml = $(button).html();
+                const $button = $(button);
+
+                // Get current revision count - use checkInvoice.by.number
+                $.ajax({
+                    url: '{{ route('get.email.invoice.number') }}',
+                    method: 'GET',
+                    data: {
+                        email_id: emailId
+                    },
+                    dataType: 'json',
+                    success: function(emailResponse) {
+                        if (emailResponse.success) {
+                            const invoiceNumber = emailResponse.invoice_number;
+
+                            $.ajax({
+                                url: '{{ route('check.invoice.by.number') }}',
+                                method: 'GET',
+                                data: {
+                                    invoice_number: invoiceNumber
+                                },
+                                dataType: 'json',
+                                success: function(response) {
+                                    if (response.exists) {
+                                        const nextRevision = response.revision_number + 1;
+                                        if (!confirm('⚠️ This will create a REVISED invoice (R' +
+                                                nextRevision + '). Continue?')) {
+                                            return;
+                                        }
+
+                                        $button.prop('disabled', true).html(
+                                            '<i class="fas fa-spinner fa-spin"></i> Creating Revision...'
+                                            );
+
+                                        $.ajax({
+                                            url: '{{ route('regenerate.invoice') }}',
+                                            method: 'POST',
+                                            data: {
+                                                email_id: emailId,
+                                                _token: '{{ csrf_token() }}'
+                                            },
+                                            dataType: 'json',
+                                            success: function(response) {
+                                                if (response.success) {
+                                                    window.open(
+                                                        '{{ url('/invoice/view') }}/' +
+                                                        response.invoice_id, '_blank');
+                                                    toastr.success(response.message ||
+                                                        '✅ Revision created successfully!'
+                                                        );
+                                                    setTimeout(() => location.reload(),
+                                                        2000);
+                                                } else {
+                                                    toastr.error(response.message ||
+                                                        'Failed to create revision');
+                                                    $button.prop('disabled', false).html(
+                                                        originalHtml);
+                                                }
+                                            },
+                                            error: function(xhr) {
+                                                let errorMsg = 'Error creating revision';
+                                                if (xhr.responseJSON && xhr.responseJSON
+                                                    .message) errorMsg = xhr.responseJSON
+                                                    .message;
+                                                toastr.error(errorMsg);
+                                                $button.prop('disabled', false).html(
+                                                    originalHtml);
+                                            }
+                                        });
+                                    } else {
+                                        toastr.error('No invoice found to revise');
+                                    }
+                                },
+                                error: function() {
+                                    toastr.error('Failed to check invoice status');
+                                }
+                            });
+                        } else {
+                            toastr.error('Could not get invoice number');
+                        }
+                    },
+                    error: function() {
+                        toastr.error('Failed to fetch email details');
+                    }
+                });
+            }
+
+            function getNextRevisionNumber(emailId) {
+                // This is a helper - actual revision number is calculated on server
+                return '?';
+            }
+        </script>
+    @endpush
 @endsection

@@ -4,6 +4,7 @@ use App\Http\Controllers\InvoiceController;
 use App\Http\Controllers\PnlController;
 use App\Http\Controllers\CreditController;
 use App\Services\ClientManager;
+use App\Http\Controllers\ReportController;
 
 // ========== INVOICE ROUTES ==========
 Route::get('/', [InvoiceController::class, 'index'])->name('index');
@@ -15,8 +16,11 @@ Route::post('/regenerate-invoice', [InvoiceController::class, 'regenerateInvoice
 Route::get('/invoice/view/{id}', [InvoiceController::class, 'viewInvoice'])->name('invoice.view');
 Route::get('/invoice/download/{id}', [InvoiceController::class, 'downloadInvoice'])->name('invoice.download');
 Route::get('/email/view', [InvoiceController::class, 'viewEmail'])->name('email.view');
-Route::get('/get-invoice-details', [InvoiceController::class, 'getInvoiceDetails'])->name('get.invoice.details');
-// ========== PNL ROUTES ==========
+
+Route::get('/check-invoice-exists', [InvoiceController::class, 'checkInvoiceExists'])->name('check.invoice.exists');
+Route::get('/get-email-invoice-number', [InvoiceController::class, 'getEmailInvoiceNumber'])->name('get.email.invoice.number');
+Route::get('/check-invoice-by-number', [InvoiceController::class, 'checkInvoiceByNumber'])->name('check.invoice.by.number');
+
 // ========== PNL ROUTES ==========
 Route::prefix('pnl')->name('pnl.')->group(function () {
     Route::get('/', [PnlController::class, 'index'])->name('index');
@@ -48,3 +52,13 @@ Route::get('/test-mail', function () {
 });
 
 Route::post('/generate-revised-invoice', [InvoiceController::class, 'generateRevisedInvoice'])->name('generate.revised.invoice');
+
+
+// ========== REPORT ROUTES ==========
+Route::prefix('reports')->name('reports.')->group(function () {
+    Route::get('/', [ReportController::class, 'index'])->name('index');
+    Route::get('/month-wise', [ReportController::class, 'monthWise'])->name('month-wise');
+    Route::get('/date-wise', [ReportController::class, 'dateWise'])->name('date-wise');
+    Route::get('/export/month-wise', [ReportController::class, 'exportMonthWise'])->name('export.month-wise');
+    Route::get('/export/date-wise', [ReportController::class, 'exportDateWise'])->name('export.date-wise');
+});

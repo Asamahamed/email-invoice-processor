@@ -163,27 +163,58 @@ public function generateAndViewInvoice(Request $request)
 {
     $request->validate([
         'email_id' => 'required|exists:incoming_emails,id',
-        'gst_number' => 'nullable|string|max:100',
-        'sales_person' => 'nullable|string|max:255',
     ]);
 
     $email = IncomingEmail::findOrFail($request->email_id);
     
     try {
+        // Check if any invoice exists with this invoice_number or tour_ref
+        $existingInvoice = GeneratedInvoice::where(function($query) use ($email) {
+            $query->where('invoice_number', 'LIKE', $email->invoice_number . '%')
+                  ->orWhere('tour_ref', $email->tour_ref)
+                  ->orWhere('original_invoice_number', $email->invoice_number);
+        })->orderBy('revision_number', 'desc')->first();
+        
         $invoiceService = new InvoiceGenerationService();
-        $invoice = $invoiceService->generateFromEmail(
-            $email,
-            null,
-            null,
-            $request->gst_number,
-            $request->sales_person
-        );
+        
+        if ($existingInvoice) {
+            // Get next revision number
+            $nextRevisionNumber = $existingInvoice->revision_number + 1;
+            $baseNumber = $email->invoice_number;
+            $newInvoiceNumber = $baseNumber . 'R' . $nextRevisionNumber;
+            
+            // Get classification
+            $agentClassifier = new \App\Services\AgentClassificationService();
+            $classification = $agentClassifier->classify(
+                $email->body ?? '', 
+                $email->from_email ?? '', 
+                $email->subject ?? '', 
+                $email->agent_name
+            );
+            
+            // Create NEW revision invoice
+            $invoice = $invoiceService->generateRevisionFromEmail(
+                $email, 
+                $classification, 
+                $newInvoiceNumber, 
+                $nextRevisionNumber,
+                $baseNumber
+            );
+            $message = '✅ Revision R' . $nextRevisionNumber . ' created!';
+        } else {
+            // Create new invoice
+            $invoice = $invoiceService->generateFromEmail($email);
+            $message = '✅ Invoice generated successfully!';
+        }
+        
         $email->update(['processing_status' => 'invoice_generated']);
         
         return response()->json([
             'success' => true,
             'invoice_id' => $invoice->id,
-            'message' => '✅ Invoice generated successfully!'
+            'invoice_number' => $invoice->invoice_number,
+            'revision_number' => $invoice->revision_number,
+            'message' => $message
         ]);
     } catch (\Exception $e) {
         \Log::error('Invoice generation failed: ' . $e->getMessage());
@@ -193,6 +224,7 @@ public function generateAndViewInvoice(Request $request)
         ], 500);
     }
 }
+
    public function getInvoiceDetails(Request $request)
 {
     $request->validate([
@@ -218,41 +250,52 @@ public function regenerateInvoice(Request $request)
 {
     $request->validate([
         'email_id' => 'required|exists:incoming_emails,id',
-        'gst_number' => 'nullable|string|max:100',
-        'sales_person' => 'nullable|string|max:255',
     ]);
     
     $email = IncomingEmail::findOrFail($request->email_id);
     
     try {
-        $existingInvoice = GeneratedInvoice::where('email_id', $email->id)->first();
+        // Find the latest invoice with this invoice_number or tour_ref
+        $latestInvoice = GeneratedInvoice::where(function($query) use ($email) {
+            $query->where('invoice_number', 'LIKE', $email->invoice_number . '%')
+                  ->orWhere('tour_ref', $email->tour_ref)
+                  ->orWhere('original_invoice_number', $email->invoice_number);
+        })->orderBy('revision_number', 'desc')->first();
         
-        if (!$existingInvoice) {
-            $invoiceService = new InvoiceGenerationService();
-            $invoice = $invoiceService->generateFromEmail(
-                $email, 
-                null, 
-                null, 
-                $request->gst_number, 
-                $request->sales_person
-            );
-        } else {
-            $invoiceService = new InvoiceGenerationService();
-            $invoice = $invoiceService->regenerateInvoice(
-                $email, 
-                $existingInvoice, 
-                null, 
-                $request->gst_number, 
-                $request->sales_person
-            );
-        }
+        // Calculate next revision number
+        $nextRevisionNumber = $latestInvoice ? ($latestInvoice->revision_number + 1) : 1;
+        
+        // Generate new invoice number with revision
+        $baseNumber = $email->invoice_number;
+        $newInvoiceNumber = $baseNumber . 'R' . $nextRevisionNumber;
+        
+        // Get classification
+        $agentClassifier = new \App\Services\AgentClassificationService();
+        $classification = $agentClassifier->classify(
+            $email->body ?? '', 
+            $email->from_email ?? '', 
+            $email->subject ?? '', 
+            $email->agent_name
+        );
+        
+        // Create NEW invoice record (NOT update existing)
+        $invoiceService = new InvoiceGenerationService();
+        $invoice = $invoiceService->generateRevisionFromEmail(
+            $email, 
+            $classification, 
+            $newInvoiceNumber, 
+            $nextRevisionNumber,
+            $baseNumber
+        );
         
         $email->update(['processing_status' => 'invoice_generated']);
         
         return response()->json([
             'success' => true,
             'invoice_id' => $invoice->id,
-            'message' => '✅ Invoice processed successfully!'
+            'invoice_number' => $invoice->invoice_number,
+            'revision_number' => $invoice->revision_number,
+            'message' => '✅ Revision R' . $nextRevisionNumber . ' created!'
         ]);
     } catch (\Exception $e) {
         \Log::error('Invoice processing failed: ' . $e->getMessage());
@@ -351,5 +394,70 @@ public function generateAndView(Request $request)
     );
 
     return response()->json(['success' => true, 'invoice_id' => $invoice->id]);
+}
+
+public function checkInvoiceExists(Request $request)
+{
+    $request->validate([
+        'email_id' => 'required|exists:incoming_emails,id'
+    ]);
+    
+    $email = IncomingEmail::findOrFail($request->email_id);
+    
+    // Check by invoice_number OR tour_ref
+    $invoice = GeneratedInvoice::where(function($query) use ($email) {
+        $query->where('invoice_number', 'LIKE', $email->invoice_number . '%')
+              ->orWhere('tour_ref', $email->tour_ref)
+              ->orWhere('original_invoice_number', $email->invoice_number);
+    })->first();
+    
+    return response()->json([
+        'exists' => $invoice !== null,
+        'invoice_id' => $invoice ? $invoice->id : null,
+        'revision_number' => $invoice ? $invoice->revision_number : 0,
+        'invoice_number' => $invoice ? $invoice->invoice_number : null,
+        'tour_ref' => $invoice ? $invoice->tour_ref : null
+    ]);
+}
+public function checkInvoiceByNumber(Request $request)
+{
+    $request->validate([
+        'invoice_number' => 'required|string',
+        'tour_ref' => 'nullable|string'
+    ]);
+    
+    $invoiceNumber = $request->invoice_number;
+    $tourRef = $request->tour_ref;
+    
+    // Check by invoice_number OR tour_ref
+    $invoice = GeneratedInvoice::where(function($query) use ($invoiceNumber, $tourRef) {
+        $query->where('invoice_number', 'LIKE', $invoiceNumber . '%')
+              ->orWhere('original_invoice_number', $invoiceNumber);
+        
+        if ($tourRef) {
+            $query->orWhere('tour_ref', $tourRef);
+        }
+    })->first();
+    
+    return response()->json([
+        'exists' => $invoice !== null,
+        'invoice_id' => $invoice ? $invoice->id : null,
+        'revision_number' => $invoice ? $invoice->revision_number : 0,
+        'invoice_number' => $invoice ? $invoice->invoice_number : null
+    ]);
+}
+public function getEmailInvoiceNumber(Request $request)
+{
+    $request->validate([
+        'email_id' => 'required|exists:incoming_emails,id'
+    ]);
+    
+    $email = IncomingEmail::findOrFail($request->email_id);
+    
+    return response()->json([
+        'success' => true,
+        'invoice_number' => $email->invoice_number,
+        'tour_ref' => $email->tour_ref
+    ]);
 }
 }
