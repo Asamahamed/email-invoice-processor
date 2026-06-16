@@ -34,6 +34,7 @@ Route::prefix('pnl')->name('pnl.')->group(function () {
     Route::post('/update-excel', [PnlController::class, 'updateExcel'])->name('update-excel');
     Route::get('/view-excel/{country}', [PnlController::class, 'viewExcel'])->name('view-excel');
     Route::get('/export-country-approved/{country}', [PnlController::class, 'exportByCountryApproved'])->name('export-country-approved');
+    Route::post('/export-selected', [PnlController::class, 'exportSelected'])->name('export.selected');
 });
 
 Route::get('/test-mail', function () {
