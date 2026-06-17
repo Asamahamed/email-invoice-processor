@@ -219,27 +219,22 @@ protected function savePnLEmail($message, $sno)
         }
         
         // 2. Transport - Country specific
-        $transportTotal = 0;
-        if ($countryCode == 'VN' || $countryCode == 'SG' || $countryCode == 'MY') {
-            $transportTotal = $this->extractTransportTotalForSouthEastAsia($htmlBody);
-            if ($transportTotal == 0) {
-                $transportTotal = $this->extractTransportTotalFromEmail($plainText);
-            }
-        } else {
-            $transportTotal = $this->extractTransportTotalFromEmail($plainText);
-        }
-        
-        if ($transportTotal > 0) {
-            $categoriesFound[] = 'Transport';
-            $pnlItemsToSave[] = [
-                'type' => 'TRANSPORT',
-                'service_name' => 'Transport Expenses',
-                'hotel_name' => null,
-                'amount' => $transportTotal,
-                'details' => ['remarks' => 'Total transport expenses']
-            ];
-        }
-        
+      // 2. Transport - Extract INDIVIDUAL ITEMS
+$transportItems = $this->extractTransportItemsForCountry($htmlBody, $plainText, $countryCode);
+
+if (!empty($transportItems)) {
+    $categoriesFound[] = 'Transport';
+    foreach ($transportItems as $transport) {
+        $pnlItemsToSave[] = [
+            'type' => 'TRANSPORT',
+            'service_name' => $transport['service_name'],
+            'hotel_name' => null,
+            'amount' => $transport['amount'],
+            'details' => $transport['details']
+        ];
+        Log::info("✅ Added transport item: {$transport['service_name']} - \${$transport['amount']}");
+    }
+}
         // 3. Other Rates - Country specific (ONLY ONE BLOCK!)
         $otherRatesTotal = 0;
         if ($countryCode == 'VN' || $countryCode == 'SG' || $countryCode == 'MY') {
@@ -535,14 +530,14 @@ private function extractTransportTotalFromEmail($text)
     if (preg_match('/Total Transport\s*:?\s*([\d,]+(?:\.\d+)?)\s*USD/i', $text, $match)) {
         $total = floatval(str_replace(',', '', $match[1]));
         Log::info("Transport Total found: " . $total);
-        return $total > 0 ? $total : 0;
+        return $total > 0 ? $total : 0; // ✅ Return 0 if total is 0 or negative
     }
     
     // Alternative pattern
     if (preg_match('/Transport.*?Total[\s\|]*:?\s*([\d,]+(?:\.\d+)?)\s*USD/is', $text, $match)) {
         $total = floatval(str_replace(',', '', $match[1]));
         Log::info("Transport Total found (alt): " . $total);
-        return $total > 0 ? $total : 0;
+        return $total > 0 ? $total : 0; // ✅ Return 0 if total is 0 or negative
     }
     
     return 0;
@@ -781,5 +776,379 @@ private function extractOtherRatesTotalForSouthEastAsia($html)
     }
     
     return 0;
+}
+
+/**
+ * Extract individual transport items from Transport section
+ * Returns array of transport items with their amounts
+ */
+private function extractTransportItemsFromEmail($html, $plainText = '')
+{
+    $transportItems = [];
+    
+    if (empty($html) && empty($plainText)) {
+        return $transportItems;
+    }
+    
+    // Try HTML extraction first
+    if (!empty($html)) {
+        $transportItems = $this->extractTransportItemsFromHTML($html);
+    }
+    
+    // If no items found, try plain text
+    if (empty($transportItems) && !empty($plainText)) {
+        $transportItems = $this->extractTransportItemsFromPlainText($plainText);
+    }
+    
+    return $transportItems;
+}
+
+/**
+ * Extract transport items from HTML tables
+ */
+private function extractTransportItemsFromHTML($html)
+{
+    $transportItems = [];
+    
+    try {
+        libxml_use_internal_errors(true);
+        $dom = new \DOMDocument();
+        $dom->loadHTML('<?xml encoding="utf-8" ?>' . $html);
+        
+        $tables = $dom->getElementsByTagName('table');
+        
+        foreach ($tables as $table) {
+            $rows = $table->getElementsByTagName('tr');
+            
+            if ($rows->length < 2) continue;
+            
+            // Check if this is a Transport table
+            $headers = [];
+            $firstRow = $rows->item(0);
+            foreach ($firstRow->childNodes as $cell) {
+                if ($cell->nodeType === XML_ELEMENT_NODE && in_array(strtolower($cell->nodeName), ['th', 'td'])) {
+                    $headers[] = trim(strtoupper($cell->textContent));
+                }
+            }
+            
+            $headerText = implode(' ', $headers);
+            
+            // ✅ CRITICAL FIX: Only identify as Transport table if it has EXPENSE column
+            // AND it doesn't have hotel-related columns (NAME, SGL, DBL, TPL, CWB, CNB)
+            $hasExpense = strpos($headerText, 'EXPENSE') !== false;
+            $hasTransport = strpos($headerText, 'TRANSPORT') !== false;
+            $hasDistance = strpos($headerText, 'DISTANCE') !== false || strpos($headerText, 'DAYS') !== false;
+            $hasHotelColumns = strpos($headerText, 'SGL') !== false || 
+                              strpos($headerText, 'DBL') !== false || 
+                              strpos($headerText, 'TPL') !== false || 
+                              strpos($headerText, 'CWB') !== false || 
+                              strpos($headerText, 'CNB') !== false;
+            
+            // ✅ ONLY process if it's a Transport table (has EXPENSE or TRANSPORT and DISTANCE/DAYS)
+            // AND it's NOT a hotel table
+            if (!($hasExpense || $hasTransport) || !$hasDistance || $hasHotelColumns) {
+                Log::info("Skipping non-transport table: " . $headerText);
+                continue;
+            }
+            
+            Log::info("Processing Transport table: " . $headerText);
+            
+            // Find column indices
+            $nameIndex = -1;
+            $totalIndex = -1;
+            $rateIndex = -1;
+            
+            foreach ($headers as $index => $header) {
+                $upperHeader = strtoupper(trim($header));
+                if (strpos($upperHeader, 'EXPENSE') !== false || 
+                    strpos($upperHeader, 'NAME') !== false || 
+                    strpos($upperHeader, 'PARTICULARS') !== false) {
+                    $nameIndex = $index;
+                }
+                if (strpos($upperHeader, 'TOTAL') !== false) {
+                    $totalIndex = $index;
+                }
+                if (strpos($upperHeader, 'RATE') !== false) {
+                    $rateIndex = $index;
+                }
+            }
+            
+            if ($nameIndex == -1 || $totalIndex == -1) {
+                continue;
+            }
+            
+            // Parse rows (skip header row)
+            for ($i = 1; $i < $rows->length; $i++) {
+                $row = $rows->item($i);
+                $cells = [];
+                
+                foreach ($row->childNodes as $cell) {
+                    if ($cell->nodeType === XML_ELEMENT_NODE && in_array(strtolower($cell->nodeName), ['td', 'th'])) {
+                        $cells[] = trim($cell->textContent);
+                    }
+                }
+                
+                if (count($cells) <= max($nameIndex, $totalIndex)) {
+                    continue;
+                }
+                
+                $serviceName = trim($cells[$nameIndex]);
+                
+                // Extract the total amount - ensure it's properly parsed
+                $totalValue = trim($cells[$totalIndex]);
+                // Remove any non-numeric characters except decimal point
+                $totalValue = preg_replace('/[^0-9.]/', '', $totalValue);
+                $totalAmount = floatval($totalValue);
+                
+                // ✅ STRICT CHECK: Skip if amount is 0 or negative
+                if ($totalAmount <= 0) {
+                    Log::info("Skipping transport item with zero/negative amount: {$serviceName} - {$totalAmount}");
+                    continue;
+                }
+                
+                // Skip if service name is empty or is a total/summary row
+                if (empty($serviceName) || 
+                    strtoupper($serviceName) === 'TOTAL' ||
+                    strtoupper($serviceName) === 'TOTAL TRANSPORT' ||
+                    strtoupper($serviceName) === 'MEAL TRANSPORT TOTAL' ||
+                    preg_match('/^[\d.,]+$/', $serviceName)) {
+                    Log::info("Skipping summary row: {$serviceName}");
+                    continue;
+                }
+                
+                // Skip if it's a "Meal Transport Total" or summary row
+                if (preg_match('/meal transport|total transport/i', $serviceName)) {
+                    Log::info("Skipping transport summary: {$serviceName}");
+                    continue;
+                }
+                
+                // ✅ EXTRA CHECK: Skip if it looks like a hotel name (has common hotel keywords)
+                if (preg_match('/hotel|resort|villa|apartment|inn|lodge|hostel/i', $serviceName)) {
+                    Log::info("Skipping hotel item in transport: {$serviceName}");
+                    continue;
+                }
+                
+                $transportItems[] = [
+                    'service_name' => $serviceName,
+                    'amount' => $totalAmount,
+                    'details' => ['remarks' => $serviceName]
+                ];
+                
+                Log::info("✓ Transport item extracted (HTML): {$serviceName} - \${$totalAmount}");
+            }
+            
+            // If we found items, break out of table loop
+            if (!empty($transportItems)) {
+                break;
+            }
+        }
+        
+    } catch (\Exception $e) {
+        Log::error('Transport items HTML extraction error: ' . $e->getMessage());
+    }
+    
+    return $transportItems;
+}
+
+/**
+ * Extract transport items from plain text (fallback for Sri Lanka and others)
+ */
+private function extractTransportItemsFromPlainText($text)
+{
+    $transportItems = [];
+    
+    if (empty($text)) {
+        return $transportItems;
+    }
+    
+    // Try to find the Transport section
+    if (preg_match('/Transport(.*?)(?:Attraction|Tour Transfers|Meals|Other Rates|$)/is', $text, $sectionMatch)) {
+        $transportSection = $sectionMatch[1];
+        
+        $lines = explode("\n", $transportSection);
+        foreach ($lines as $line) {
+            if (strpos($line, '|') !== false) {
+                $parts = explode('|', $line);
+                if (count($parts) >= 3) {
+                    $cleanParts = array_map('trim', $parts);
+                    $serviceName = $cleanParts[1] ?? '';
+                    $amount = 0;
+                    
+                    $lastPart = end($cleanParts);
+                    // Remove any non-numeric characters except decimal point
+                    $lastPartClean = preg_replace('/[^0-9.]/', '', $lastPart);
+                    if (is_numeric($lastPartClean)) {
+                        $amount = floatval($lastPartClean);
+                    } else {
+                        $secondLast = $cleanParts[count($cleanParts) - 2] ?? '';
+                        $secondLastClean = preg_replace('/[^0-9.]/', '', $secondLast);
+                        if (is_numeric($secondLastClean)) {
+                            $amount = floatval($secondLastClean);
+                        }
+                    }
+                    
+                    // ✅ STRICT CHECK: Skip if amount is 0 or negative
+                    if ($amount <= 0) {
+                        Log::info("Skipping transport item with zero amount in plain text: {$serviceName}");
+                        continue;
+                    }
+                    
+                    if (!empty($serviceName) && 
+                        !preg_match('/total|meal|transport/i', $serviceName)) {
+                        $transportItems[] = [
+                            'service_name' => $serviceName,
+                            'amount' => $amount,
+                            'details' => ['remarks' => $serviceName]
+                        ];
+                        Log::info("✓ Transport item extracted (pipe): {$serviceName} - \${$amount}");
+                    }
+                }
+            }
+        }
+    }
+    
+    return $transportItems;
+}
+
+/**
+ * Extract individual transport items - Main method with country-specific logic
+ */
+private function extractTransportItemsForCountry($html, $plainText, $countryCode)
+{
+    $transportItems = [];
+    
+    // For Vietnam, Singapore, Malaysia - use HTML parsing
+    if ($countryCode == 'VN' || $countryCode == 'SG' || $countryCode == 'MY') {
+        $transportItems = $this->extractTransportItemsFromHTML($html);
+        Log::info("Transport items from HTML (SEA): " . json_encode($transportItems));
+        
+        // If no items found, try plain text
+        if (empty($transportItems)) {
+            $transportItems = $this->extractTransportItemsFromPlainText($plainText);
+            Log::info("Transport items from plain text (SEA): " . json_encode($transportItems));
+        }
+    } else {
+        // ✅ For Sri Lanka - ONLY use plain text parsing, skip HTML
+        $transportItems = $this->extractTransportItemsFromPlainText($plainText);
+        Log::info("Transport items from plain text (LK): " . json_encode($transportItems));
+        
+        // ✅ Don't fall back to HTML for Sri Lanka as it causes confusion
+    }
+    
+    // Filter out items with amount <= 0 (extra safety)
+    $transportItems = array_filter($transportItems, function($item) {
+        return isset($item['amount']) && $item['amount'] > 0;
+    });
+    
+    Log::info("Final transport items after filtering: " . json_encode($transportItems));
+    
+    // ✅ FIX: Only add fallback if total > 0
+    if (empty($transportItems)) {
+        $total = $this->extractTransportTotalFromEmail($plainText);
+        Log::info("Transport total from email: " . $total);
+        
+        // ✅ CRITICAL FIX: Only add if total > 0
+        if ($total > 0) {
+            $transportItems[] = [
+                'service_name' => 'Transport Expenses (Total)',
+                'amount' => $total,
+                'details' => ['remarks' => 'Total transport expenses']
+            ];
+            Log::info("⚠️ Using transport total as fallback: \${$total}");
+        } else {
+            Log::info("ℹ️ No transport items found and total is 0, skipping transport");
+        }
+    }
+    
+    return $transportItems;
+}
+public function fetchAllPnLEmailsInBackground()
+{
+    try {
+        set_time_limit(0); // No time limit
+        ini_set('memory_limit', '1024M');
+        
+        $allMessages = [];
+        $nextLink = null;
+        $pageCount = 0;
+        $maxPages = 50;
+
+        $url = 'https://graph.microsoft.com/v1.0/users/' . env('GRAPH_PNL_USER') . '/messages'
+            . '?$top=100'
+            . '&$orderby=receivedDateTime desc'
+            . '&$select=id,subject,bodyPreview,from,receivedDateTime,isRead,hasAttachments';
+
+        do {
+            $response = Http::withToken($this->accessToken)
+                ->timeout(300) // 5 minutes per page
+                ->get($url);
+
+            if (!$response->ok()) {
+                Log::error('Failed to fetch PnL emails: ' . $response->body());
+                break;
+            }
+
+            $data = $response->json();
+            $messages = $data['value'] ?? [];
+            $allMessages = array_merge($allMessages, $messages);
+            
+            $nextLink = $data['@odata.nextLink'] ?? null;
+            $pageCount++;
+            
+            Log::info("Background fetch page {$pageCount}: " . count($messages) . " emails");
+
+            if ($pageCount >= $maxPages) {
+                Log::warning("Reached max pages ({$maxPages})");
+                break;
+            }
+
+            if ($nextLink) {
+                usleep(300000); // 0.3 second delay
+            }
+
+        } while ($nextLink);
+
+        Log::info("Total emails fetched in background: " . count($allMessages));
+
+        $newCount = 0;
+        $sno = PnlRecord::max('sno') ?? 0;
+
+        foreach ($allMessages as $message) {
+            $existing = PnlRecord::where('message_id', $message['id'])->first();
+            if (!$existing) {
+                $sno++;
+                $fullMessage = $this->fetchFullMessage($message['id']);
+                if ($fullMessage) {
+                    $saved = $this->savePnLEmail($fullMessage, $sno);
+                    if ($saved) $newCount++;
+                }
+            }
+        }
+
+        Log::info("Background fetch completed: {$newCount} new emails");
+        return $newCount;
+
+    } catch (\Exception $e) {
+        Log::error('Background fetch error: ' . $e->getMessage());
+        return 0;
+    }
+}
+
+protected function fetchFullMessage($messageId)
+{
+    try {
+        $response = Http::withToken($this->accessToken)
+            ->timeout(60)
+            ->get('https://graph.microsoft.com/v1.0/users/' . env('GRAPH_PNL_USER') . '/messages/' . $messageId, [
+                '$select' => 'id,subject,body,bodyPreview,from,receivedDateTime,isRead,hasAttachments',
+            ]);
+        
+        if ($response->ok()) {
+            return $response->json();
+        }
+    } catch (\Exception $e) {
+        Log::error("Failed to fetch full message: " . $e->getMessage());
+    }
+    return null;
 }
 }
