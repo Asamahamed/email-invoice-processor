@@ -47,7 +47,7 @@ class MicrosoftGraphService
         }
     }
     
-    public function fetchAllEmails()
+public function fetchAllEmails()
 {
     try {
         set_time_limit(600);
@@ -55,15 +55,14 @@ class MicrosoftGraphService
         $allMessages = [];
         $nextLink = null;
         $pageCount = 0;
-        $maxPages = 10; // Maximum pages to fetch
+        $maxPages = 10;
+
+        // ✅ Use the Inbox folder explicitly
+        $baseUrl = 'https://graph.microsoft.com/v1.0/users/' . env('GRAPH_INVOICE_USER') . '/mailfolders/inbox/messages';
         
-        $baseUrl = 'https://graph.microsoft.com/v1.0/users/' . env('GRAPH_INVOICE_USER') . '/messages';
-        
-        Log::info("🚀 Starting to fetch emails...");
+        Log::info("🚀 Starting to fetch emails from INBOX...");
         
         do {
-            // If we have a nextLink, use it as-is (don't add extra params)
-            // Microsoft Graph nextLink already contains all parameters
             $url = $nextLink ?? $baseUrl . '?' . http_build_query([
                 '$top' => 50,
                 '$orderby' => 'receivedDateTime desc',
@@ -84,40 +83,33 @@ class MicrosoftGraphService
             $data = $response->json();
             $messages = $data['value'] ?? [];
             
-            // If no messages, break
             if (empty($messages)) {
                 Log::info("No more messages to fetch");
                 break;
             }
             
             $allMessages = array_merge($allMessages, $messages);
-            
-            // Get next page link
             $nextLink = $data['@odata.nextLink'] ?? null;
             $pageCount++;
             
             Log::info("📥 Page {$pageCount}: " . count($messages) . " emails (Total so far: " . count($allMessages) . ")");
             
-            // Stop if we've reached max pages
             if ($pageCount >= $maxPages) {
                 Log::warning("Reached maximum page limit ({$maxPages} pages)");
                 break;
             }
             
-            // If nextLink is null, we're done
             if (!$nextLink) {
                 Log::info("✅ No more pages to fetch");
                 break;
             }
             
-            // Small delay between requests
             usleep(200000);
             
         } while ($nextLink);
         
-        Log::info("📥 TOTAL emails fetched: " . count($allMessages));
+        Log::info("📥 TOTAL emails fetched from INBOX: " . count($allMessages));
         
-        // Process each message
         $newCount = 0;
         $processedCount = 0;
         $totalMessages = count($allMessages);
@@ -139,7 +131,6 @@ class MicrosoftGraphService
                     Log::info("📬 Updated read status for: " . $subject);
                 }
             } else {
-                // Fetch full message for new emails
                 $fullMessage = $this->fetchFullMessage($message['id']);
                 if ($fullMessage) {
                     $saved = $this->saveEmail($fullMessage);
@@ -148,7 +139,6 @@ class MicrosoftGraphService
                         Log::info("✅ Saved new email: " . $subject);
                     }
                 } else {
-                    // Fallback: save with preview
                     $saved = $this->saveEmailWithPreview($message);
                     if ($saved) {
                         $newCount++;
