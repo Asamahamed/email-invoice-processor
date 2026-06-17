@@ -51,97 +51,82 @@ class PnlEmailService
 public function fetchPnLEmails()
 {
     try {
-        $allMessages = [];
-        $nextLink = null;
-        $pageCount = 0;
-        $maxPages = 10;
-
-        // Fetch emails with NEWEST FIRST
+        // STEP 1: Get all existing message IDs from database (FAST)
+        $existingIds = PnlRecord::pluck('message_id')->toArray();
+        Log::info("📊 Existing emails in DB: " . count($existingIds));
+        
+        // STEP 2: Fetch ONLY the last 50 emails (LIMITED)
         $url = 'https://graph.microsoft.com/v1.0/users/' . env('GRAPH_PNL_USER') . '/messages'
-            . '?$top=100'
-            . '&$orderby=receivedDateTime desc'  // NEWEST FIRST
+            . '?$top=50'  // ONLY 50 emails!
+            . '&$orderby=receivedDateTime desc'
             . '&$select=id,subject,body,bodyPreview,from,receivedDateTime,isRead,hasAttachments';
-
-        do {
-            $response = Http::withToken($this->accessToken)
-                ->timeout(120)
-                ->get($url);
-
-            if (!$response->ok()) {
-                Log::error('Failed to fetch PnL emails: ' . $response->body());
-                return 0;
+        
+        Log::info("📧 Fetching latest 50 emails only...");
+        
+        $response = Http::withToken($this->accessToken)
+            ->timeout(30)  // 30 seconds timeout
+            ->get($url);
+        
+        if (!$response->ok()) {
+            Log::error('Failed to fetch emails: ' . $response->body());
+            return 0;
+        }
+        
+        $data = $response->json();
+        $messages = $data['value'] ?? [];
+        
+        Log::info("📬 Found " . count($messages) . " emails in API");
+        
+        // STEP 3: Filter to find NEW emails only (FAST)
+        $newMessages = [];
+        foreach ($messages as $message) {
+            if (!in_array($message['id'], $existingIds)) {
+                $newMessages[] = $message;
             }
-
-            $data = $response->json();
-            $messages = $data['value'] ?? [];
-            $allMessages = array_merge($allMessages, $messages);
-            
-            $nextLink = $data['@odata.nextLink'] ?? null;
-            $pageCount++;
-            
-            Log::info("Page {$pageCount}: " . count($messages) . " emails (Total: " . count($allMessages) . ")");
-
-            if ($pageCount >= $maxPages) break;
-            if ($nextLink) usleep(500000);
-
-        } while ($nextLink);
-
-        Log::info('Total emails fetched: ' . count($allMessages));
-
-        // Get current max S.No
+        }
+        
+        Log::info("🆕 New emails to process: " . count($newMessages));
+        
+        // STEP 4: If no new emails, return early (NO PROCESSING)
+        if (empty($newMessages)) {
+            Log::info("📭 No new emails to process");
+            return 0;
+        }
+        
+        // STEP 5: Process ONLY new emails
         $sno = PnlRecord::max('sno') ?? 0;
         $newCount = 0;
         $failedEmails = [];
-
-        // Process emails in the order they were fetched (NEWEST FIRST)
-        foreach ($allMessages as $message) {
-            $subject = $message['subject'] ?? 'No Subject';
+        
+        foreach ($newMessages as $message) {
+            $sno++;
+            Log::info("📝 Processing: " . ($message['subject'] ?? 'No Subject'));
             
-            // Skip non-PNL
-            if (stripos($subject, 'PNL:') === false) {
-                Log::info("⏭️ Skipping non-PNL: " . $subject);
-                continue;
-            }
-
-            // Check if already exists
-            $existing = PnlRecord::where('message_id', $message['id'])->first();
-
-            if (!$existing) {
-                $sno++;
-                Log::info("📝 Processing: " . $subject . " (S.No: " . $sno . ")");
-                
-                try {
-                    $saved = $this->savePnLEmail($message, $sno);
+            try {
+                // Fetch FULL body ONLY for new emails
+                $fullMessage = $this->fetchFullMessage($message['id']);
+                if ($fullMessage) {
+                    $saved = $this->savePnLEmail($fullMessage, $sno);
                     if ($saved) {
                         $newCount++;
-                        Log::info("✅ Saved: " . $subject);
+                        Log::info("✅ Saved: " . ($message['subject'] ?? 'No Subject'));
                     } else {
-                        $failedEmails[] = $subject;
-                        Log::error("❌ FAILED to save: " . $subject);
+                        $failedEmails[] = $message['subject'] ?? 'Unknown';
+                        Log::error("❌ FAILED to save: " . ($message['subject'] ?? 'No Subject'));
                     }
-                } catch (\Exception $e) {
-                    $failedEmails[] = $subject;
-                    Log::error("❌ EXCEPTION saving: " . $subject . " - " . $e->getMessage());
-                    Log::error($e->getTraceAsString());
                 }
-            } else {
-                Log::info("⏭️ Already exists: " . $subject);
+            } catch (\Exception $e) {
+                $failedEmails[] = $message['subject'] ?? 'Unknown';
+                Log::error("❌ EXCEPTION: " . $e->getMessage());
             }
         }
-
-        Log::info("📊 FINAL SUMMARY:");
-        Log::info("  ✅ New emails saved: " . $newCount);
-        Log::info("  ❌ Failed emails: " . count($failedEmails));
         
-        if (!empty($failedEmails)) {
-            Log::info("  Failed subjects: " . implode(', ', array_slice($failedEmails, 0, 10)));
-        }
-
+        Log::info("📊 SUMMARY: " . $newCount . " new emails saved, " . count($failedEmails) . " failed");
+        
         return $newCount;
-
+        
     } catch (\Exception $e) {
         Log::error('Error fetching PnL emails: ' . $e->getMessage());
-        Log::error($e->getTraceAsString());
         return 0;
     }
 }
