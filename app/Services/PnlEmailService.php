@@ -237,7 +237,7 @@ protected function savePnLEmail($message, $sno)
             }
         }
         
-        // ✅ FIX 1: Calculate transport total
+        // Calculate transport total
         $transportTotal = 0;
         foreach ($transportItems as $item) {
             $transportTotal += $item['amount'];
@@ -254,7 +254,6 @@ protected function savePnLEmail($message, $sno)
             $otherRatesTotal = $this->extractOtherRatesTotalFromEmail($plainText);
         }
         
-        // ✅ FIX 2: Use $transportTotal which is now defined
         if ($otherRatesTotal > 0 && $otherRatesTotal != $transportTotal) {
             $categoriesFound[] = 'Other Rates';
             $pnlItemsToSave[] = [
@@ -377,6 +376,9 @@ protected function savePnLEmail($message, $sno)
                 'item_details' => json_encode($item['details']),
             ]);
         }
+        
+        // ✅✅✅ AUTO-UPDATE: Get client_name, start_date, end_date from invoices
+        $this->updatePnLItemsWithInvoiceData($record);
         
         Log::info("✅ Saved PnL record: {$isNumber}");
         return true;
@@ -1159,5 +1161,88 @@ protected function fetchFullMessage($messageId)
         Log::error("Failed to fetch full message: " . $e->getMessage());
     }
     return null;
+}
+/**
+ * Update PnL items with client info from matching invoices
+ */
+protected function updatePnLItemsWithInvoiceData($pnlRecord)
+{
+    try {
+        $invoiceNumber = $pnlRecord->invoice_number;
+        $tourRef = $pnlRecord->tour_ref;
+        
+        $matchedEmail = null;
+        
+        // Try to match by invoice_number
+        if ($invoiceNumber && $invoiceNumber !== 'NA' && $invoiceNumber !== 'N/A') {
+            $matchedEmail = \App\Models\IncomingEmail::where('invoice_number', $invoiceNumber)
+                ->whereNotNull('guest_name')
+                ->where('guest_name', '!=', 'NA')
+                ->where('guest_name', '!=', '')
+                ->first();
+        }
+        
+        // If not found, try by tour_ref
+        if (!$matchedEmail && $tourRef && $tourRef !== 'NA' && $tourRef !== 'N/A') {
+            $matchedEmail = \App\Models\IncomingEmail::where('tour_ref', $tourRef)
+                ->whereNotNull('guest_name')
+                ->where('guest_name', '!=', 'NA')
+                ->where('guest_name', '!=', '')
+                ->first();
+        }
+        
+        if ($matchedEmail) {
+            Log::info("✅ Found matching invoice for PnL record {$pnlRecord->id}");
+            
+            // ✅ ALSO UPDATE PNL RECORD
+            $pnlRecord->vendor_name = $matchedEmail->guest_name;
+            $pnlRecord->start_date = $matchedEmail->travel_start_date;
+            $pnlRecord->end_date = $matchedEmail->travel_end_date;
+            $pnlRecord->save();
+            
+            // Update all PnL items
+            $pnlItems = PnlItem::where('pnl_record_id', $pnlRecord->id)->get();
+            $updatedCount = 0;
+            
+            foreach ($pnlItems as $item) {
+                $updated = false;
+                
+                if ($matchedEmail->guest_name && $matchedEmail->guest_name !== 'NA' && $matchedEmail->guest_name !== '') {
+                    $item->client_name = $matchedEmail->guest_name;
+                    $updated = true;
+                }
+                
+                if ($matchedEmail->travel_start_date) {
+                    $item->start_date = $matchedEmail->travel_start_date;
+                    if (isset($item->check_in_date)) {
+                        $item->check_in_date = $matchedEmail->travel_start_date;
+                    }
+                    $updated = true;
+                }
+                
+                if ($matchedEmail->travel_end_date) {
+                    $item->end_date = $matchedEmail->travel_end_date;
+                    if (isset($item->check_out_date)) {
+                        $item->check_out_date = $matchedEmail->travel_end_date;
+                    }
+                    $updated = true;
+                }
+                
+                if ($updated) {
+                    $item->save();
+                    $updatedCount++;
+                }
+            }
+            
+            Log::info("✅ Updated PnL record and {$updatedCount} items with client info");
+            return $updatedCount;
+        }
+        
+        return 0;
+        
+    } catch (\Exception $e) {
+        Log::error("Error updating PnL items with invoice data: " . $e->getMessage());
+        return 0;
+    }
 }
 }

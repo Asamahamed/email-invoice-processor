@@ -21,21 +21,22 @@ class PnLExcelService
         'MY' => 4.70,
     ];
 
-    private $excelColumns = [
-        'A' => 'S.No',
-        'B' => 'Tour Number',
-        'C' => 'Invoice Number',
-        'D' => 'Type',
-        'E' => 'Start Date',
-        'F' => 'End Date',
-        'G' => 'Credit Type',
-        'H' => 'Agent Name',
-        'I' => 'Description',
-        'J' => 'Amount (USD)',
-        'K' => 'Exchange Rate',
-        'L' => 'Amount (Local)',
-        'M' => 'Remarks'
-    ];
+  private $excelColumns = [
+    'A' => 'S.No',
+    'B' => 'Tour Number',
+    'C' => 'Invoice Number',
+    'D' => 'Client Name',        // ✅ NEW COLUMN
+    'E' => 'Type',
+    'F' => 'Start Date',
+    'G' => 'End Date',
+    'H' => 'Credit Type',
+    'I' => 'Agent Name',
+    'J' => 'Description',
+    'K' => 'Amount (USD)',
+    'L' => 'Exchange Rate',
+    'M' => 'Amount (Local)',
+    'N' => 'Remarks'
+];
 
     public function processAndUpdateExcel(PnlRecord $record)
     {
@@ -71,16 +72,14 @@ foreach ($items as $item) {
     $remarks = '';
     $itemDetails = json_decode($item->item_details, true);
     
-    // Description column - hotel name for HOTEL, otherwise type name
     $description = $item->type;
     if ($item->type == 'HOTEL') {
         $description = $item->hotel_name ?? $item->service_name ?? $item->type;
     }
     
-    // Make amount negative for expenses (all except INVOICE)
     $amount = $item->amount_original;
     if ($item->type != 'INVOICE') {
-        $amount = -abs($amount); // Convert to negative
+        $amount = -abs($amount);
     }
     
     if ($item->type == 'INVOICE') {
@@ -98,14 +97,15 @@ foreach ($items as $item) {
     $allItems[] = [
         'sno' => $sno++,
         'type' => $item->type,
+        'client_name' => $item->client_name ?? '',  // ✅ NEW
         'description' => $description,
-        'start_date' => $startDate,
-        'end_date' => $endDate,
+        'start_date' => $item->start_date ?? $startDate,
+        'end_date' => $item->end_date ?? $endDate,
         'credit_type' => $item->credit_type,
         'agent_name' => $agentName,
-        'amount_usd' => $amount,  // This will be negative for expenses
+        'amount_usd' => $amount,
         'exchange_rate' => $exchangeRate,
-        'amount_local' => round($amount * $exchangeRate, 2),  // This will be negative for expenses
+        'amount_local' => round($amount * $exchangeRate, 2),
         'remarks' => $remarks
     ];
 }
@@ -272,67 +272,65 @@ private function addItemsToSpreadsheet($spreadsheet, $items, $tourRef, $invoiceN
      * Write a single row to spreadsheet
      */
     private function writeRow($sheet, $row, $item, $tourRef, $invoiceNumber)
-    {
-        $amount = $item['amount_usd'];
-        $localAmount = $item['amount_local'];
-        
-        // Format amount: INVOICE as positive, others as negative in brackets
-        $formattedAmount = $this->formatAmount($amount);
-        $formattedLocalAmount = $this->formatAmount($localAmount);
-        
-        $sheet->setCellValue("A{$row}", $item['sno']);
-        $sheet->setCellValue("B{$row}", $tourRef ?? '-');
-        $sheet->setCellValue("C{$row}", $invoiceNumber ?? '-');
-        $sheet->setCellValue("D{$row}", $item['type']);
-        $sheet->setCellValue("E{$row}", $item['start_date']);
-        $sheet->setCellValue("F{$row}", $item['end_date']);
-        $sheet->setCellValue("G{$row}", $item['credit_type']);
-        $sheet->setCellValue("H{$row}", $item['agent_name']);
-        $sheet->setCellValue("I{$row}", $item['description']);
-        $sheet->setCellValue("J{$row}", $formattedAmount);
-        $sheet->setCellValue("K{$row}", $item['exchange_rate']);
-        $sheet->setCellValue("L{$row}", $formattedLocalAmount);
-        $sheet->setCellValue("M{$row}", $item['remarks']);
-        
-        // Color coding
-        $colors = [
-            'INVOICE' => 'D5E8D4',
-            'HOTEL' => 'FFF2CC',
-            'TRANSPORT' => 'DDEBF7',
-            'TOUR TRANSFER' => 'E2EFDA',
-            'ATTRACTION' => 'FCE4D6',
-            'MEALS' => 'E1C699',
-            'OTHER RATES' => 'D9D9D9'
-        ];
-        
-        if (isset($colors[$item['type']])) {
-            $sheet->getStyle("A{$row}:M{$row}")->getFill()
-                ->setFillType(Fill::FILL_SOLID)
-                ->getStartColor()->setRGB($colors[$item['type']]);
-        }
-        
-        $sheet->getStyle("A{$row}:M{$row}")->applyFromArray([
-            'borders' => ['allBorders' => ['borderStyle' => Border::BORDER_THIN]]
-        ]);
-        
-        // Color for negative amounts (expenses) - show in red
-        if ($amount < 0) {
-            $sheet->getStyle("J{$row}")->getFont()->getColor()->setRGB('DC3545');
-            $sheet->getStyle("L{$row}")->getFont()->getColor()->setRGB('DC3545');
-        } else {
-            $sheet->getStyle("J{$row}")->getFont()->getColor()->setRGB('28A745');
-            $sheet->getStyle("L{$row}")->getFont()->getColor()->setRGB('28A745');
-        }
-        
-        Log::info("Added row {$row}: Type={$item['type']}, Description={$item['description']}, Amount={$formattedAmount}");
+{
+    $amount = $item['amount_usd'];
+    $localAmount = $item['amount_local'];
+    
+    $formattedAmount = $this->formatAmount($amount);
+    $formattedLocalAmount = $this->formatAmount($localAmount);
+    
+    $sheet->setCellValue("A{$row}", $item['sno']);
+    $sheet->setCellValue("B{$row}", $tourRef ?? '-');
+    $sheet->setCellValue("C{$row}", $invoiceNumber ?? '-');
+    $sheet->setCellValue("D{$row}", $item['client_name'] ?? '');  // ✅ NEW
+    $sheet->setCellValue("E{$row}", $item['type']);
+    $sheet->setCellValue("F{$row}", $item['start_date']);
+    $sheet->setCellValue("G{$row}", $item['end_date']);
+    $sheet->setCellValue("H{$row}", $item['credit_type']);
+    $sheet->setCellValue("I{$row}", $item['agent_name']);
+    $sheet->setCellValue("J{$row}", $item['description']);
+    $sheet->setCellValue("K{$row}", $formattedAmount);
+    $sheet->setCellValue("L{$row}", $item['exchange_rate']);
+    $sheet->setCellValue("M{$row}", $formattedLocalAmount);
+    $sheet->setCellValue("N{$row}", $item['remarks']);
+    
+    // Color coding (update ranges)
+    $colors = [
+        'INVOICE' => 'D5E8D4',
+        'HOTEL' => 'FFF2CC',
+        'TRANSPORT' => 'DDEBF7',
+        'TOUR TRANSFER' => 'E2EFDA',
+        'ATTRACTION' => 'FCE4D6',
+        'MEALS' => 'E1C699',
+        'OTHER RATES' => 'D9D9D9'
+    ];
+    
+    if (isset($colors[$item['type']])) {
+        $sheet->getStyle("A{$row}:N{$row}")->getFill()  // ✅ Changed M to N
+            ->setFillType(Fill::FILL_SOLID)
+            ->getStartColor()->setRGB($colors[$item['type']]);
     }
+    
+    $sheet->getStyle("A{$row}:N{$row}")->applyFromArray([  // ✅ Changed M to N
+        'borders' => ['allBorders' => ['borderStyle' => Border::BORDER_THIN]]
+    ]);
+    
+    // Color for negative amounts
+    if ($amount < 0) {
+        $sheet->getStyle("K{$row}")->getFont()->getColor()->setRGB('DC3545');
+        $sheet->getStyle("M{$row}")->getFont()->getColor()->setRGB('DC3545');
+    } else {
+        $sheet->getStyle("K{$row}")->getFont()->getColor()->setRGB('28A745');
+        $sheet->getStyle("M{$row}")->getFont()->getColor()->setRGB('28A745');
+    }
+}
 
-    private function autoSizeColumns($sheet)
-    {
-        foreach (range('A', 'M') as $col) {
-            $sheet->getColumnDimension($col)->setAutoSize(true);
-        }
+private function autoSizeColumns($sheet)
+{
+    foreach (range('A', 'N') as $col) {  // ✅ Changed M to N
+        $sheet->getColumnDimension($col)->setAutoSize(true);
     }
+}
 
     /**
      * Add Profit/Loss row using value from email
@@ -341,18 +339,15 @@ private function addProfitLossRow($spreadsheet, $startRow, $endRow, $tourRef, $i
 {
     $sheet = $spreadsheet->getActiveSheet();
     
-    // If we have Profit/Loss from email, use it directly
     if ($profitLossFromEmail !== null && $profitLossFromEmail != 0) {
         $profitLoss = $profitLossFromEmail;
-        Log::info("Using Profit/Loss from email: " . $profitLoss);
     } else {
-        // Fallback: Calculate from items
         $invoiceTotal = 0;
         $expenseTotal = 0;
         
         for ($row = $startRow; $row <= $endRow; $row++) {
-            $type = $sheet->getCell("D{$row}")->getValue();
-            $amountCell = $sheet->getCell("J{$row}")->getValue();
+            $type = $sheet->getCell("E{$row}")->getValue();  // ✅ Changed D to E (Type moved)
+            $amountCell = $sheet->getCell("K{$row}")->getValue();  // ✅ Changed J to K
             $amount = $this->parseAmount($amountCell);
             
             if ($type == 'INVOICE') {
@@ -362,45 +357,40 @@ private function addProfitLossRow($spreadsheet, $startRow, $endRow, $tourRef, $i
             }
         }
         $profitLoss = $invoiceTotal - $expenseTotal;
-        Log::info("Calculated Profit/Loss from items: " . $profitLoss);
     }
     
-    // Add blank row for separation
     $pnlRow = $endRow + 1;
     $sheet->insertNewRowBefore($pnlRow);
     
-    // Add P&L row
     $sheet->setCellValue("A{$pnlRow}", '');
     $sheet->setCellValue("B{$pnlRow}", $tourRef ?? '-');
     $sheet->setCellValue("C{$pnlRow}", $invoiceNumber ?? '-');
-    $sheet->setCellValue("D{$pnlRow}", 'PROFIT / (LOSS)');
-    $sheet->setCellValue("E{$pnlRow}", '');
+    $sheet->setCellValue("D{$pnlRow}", '');  // ✅ Client Name - blank
+    $sheet->setCellValue("E{$pnlRow}", 'PROFIT / (LOSS)');  // ✅ Type moved to E
     $sheet->setCellValue("F{$pnlRow}", '');
     $sheet->setCellValue("G{$pnlRow}", '');
-    $sheet->setCellValue("H{$pnlRow}", $agentName ?? '-');
-    $sheet->setCellValue("I{$pnlRow}", '');
+    $sheet->setCellValue("H{$pnlRow}", '');
+    $sheet->setCellValue("I{$pnlRow}", $agentName ?? '-');
+    $sheet->setCellValue("J{$pnlRow}", '');
     
-    // Set amount with proper formatting
     if ($profitLoss >= 0) {
-        $sheet->setCellValue("J{$pnlRow}", number_format($profitLoss, 2));
-        $sheet->setCellValue("M{$pnlRow}", "Profit: " . number_format($profitLoss, 2) . " USD");
+        $sheet->setCellValue("K{$pnlRow}", number_format($profitLoss, 2));
+        $sheet->setCellValue("N{$pnlRow}", "Profit: " . number_format($profitLoss, 2) . " USD");
     } else {
-        $sheet->setCellValue("J{$pnlRow}", '(' . number_format(abs($profitLoss), 2) . ')');
-        $sheet->setCellValue("M{$pnlRow}", "Loss: " . number_format(abs($profitLoss), 2) . " USD");
+        $sheet->setCellValue("K{$pnlRow}", '(' . number_format(abs($profitLoss), 2) . ')');
+        $sheet->setCellValue("N{$pnlRow}", "Loss: " . number_format(abs($profitLoss), 2) . " USD");
     }
     
-    $sheet->setCellValue("K{$pnlRow}", $exchangeRate);
+    $sheet->setCellValue("L{$pnlRow}", $exchangeRate);
     
-    // Local amount
     $localAmount = abs($profitLoss) * $exchangeRate;
     if ($profitLoss >= 0) {
-        $sheet->setCellValue("L{$pnlRow}", round($localAmount, 2));
+        $sheet->setCellValue("M{$pnlRow}", round($localAmount, 2));
     } else {
-        $sheet->setCellValue("L{$pnlRow}", '(' . number_format($localAmount, 2) . ')');
+        $sheet->setCellValue("M{$pnlRow}", '(' . number_format($localAmount, 2) . ')');
     }
     
-    // Style the P&L row
-    $sheet->getStyle("A{$pnlRow}:M{$pnlRow}")->applyFromArray([
+    $sheet->getStyle("A{$pnlRow}:N{$pnlRow}")->applyFromArray([  // ✅ Changed M to N
         'font' => ['bold' => true, 'size' => 11],
         'fill' => [
             'fillType' => Fill::FILL_SOLID,
@@ -414,13 +404,12 @@ private function addProfitLossRow($spreadsheet, $startRow, $endRow, $tourRef, $i
         ]
     ]);
     
-    // Color based on profit/loss
     if ($profitLoss < 0) {
-        $sheet->getStyle("J{$pnlRow}")->getFont()->getColor()->setRGB('DC3545');
-        $sheet->getStyle("L{$pnlRow}")->getFont()->getColor()->setRGB('DC3545');
+        $sheet->getStyle("K{$pnlRow}")->getFont()->getColor()->setRGB('DC3545');
+        $sheet->getStyle("M{$pnlRow}")->getFont()->getColor()->setRGB('DC3545');
     } else {
-        $sheet->getStyle("J{$pnlRow}")->getFont()->getColor()->setRGB('28A745');
-        $sheet->getStyle("L{$pnlRow}")->getFont()->getColor()->setRGB('28A745');
+        $sheet->getStyle("K{$pnlRow}")->getFont()->getColor()->setRGB('28A745');
+        $sheet->getStyle("M{$pnlRow}")->getFont()->getColor()->setRGB('28A745');
     }
     
     return $pnlRow;
@@ -444,30 +433,47 @@ private function addProfitLossRow($spreadsheet, $startRow, $endRow, $tourRef, $i
         return $path;
     }
 
-    private function loadOrCreateSpreadsheet($path, $countryCode)
-    {
-        if (file_exists($path)) {
-            return IOFactory::load($path);
-        }
-        
-        $spreadsheet = new Spreadsheet();
-        $sheet = $spreadsheet->getActiveSheet();
-        $sheet->setTitle("PnL - " . $countryCode);
-        
-        foreach ($this->excelColumns as $col => $header) {
-            $sheet->setCellValue($col . '1', $header);
-        }
-        
-        $sheet->getStyle('A1:M1')->applyFromArray([
-            'font' => ['bold' => true, 'color' => ['rgb' => 'FFFFFF'], 'size' => 11],
-            'fill' => ['fillType' => Fill::FILL_SOLID, 'startColor' => ['rgb' => '4472C4']],
-            'alignment' => ['horizontal' => Alignment::HORIZONTAL_CENTER]
-        ]);
-        
-        $this->autoSizeColumns($sheet);
-        
-        return $spreadsheet;
+private function loadOrCreateSpreadsheet($path, $countryCode)
+{
+    if (file_exists($path)) {
+        return IOFactory::load($path);
     }
+    
+    $spreadsheet = new Spreadsheet();
+    $sheet = $spreadsheet->getActiveSheet();
+    $sheet->setTitle("PnL - " . $countryCode);
+    
+    $headers = [
+        'A1' => 'S.No',
+        'B1' => 'Tour Number',
+        'C1' => 'Invoice Number',
+        'D1' => 'Client Name',      // ✅ NEW
+        'E1' => 'Type',
+        'F1' => 'Start Date',
+        'G1' => 'End Date',
+        'H1' => 'Credit Type',
+        'I1' => 'Agent Name',
+        'J1' => 'Description',
+        'K1' => 'Amount (USD)',
+        'L1' => 'Exchange Rate',
+        'M1' => 'Amount (Local)',
+        'N1' => 'Remarks'
+    ];
+    
+    foreach ($headers as $cell => $header) {
+        $sheet->setCellValue($cell, $header);
+    }
+    
+    $sheet->getStyle('A1:N1')->applyFromArray([  // ✅ Changed M to N
+        'font' => ['bold' => true, 'color' => ['rgb' => 'FFFFFF'], 'size' => 11],
+        'fill' => ['fillType' => Fill::FILL_SOLID, 'startColor' => ['rgb' => '4472C4']],
+        'alignment' => ['horizontal' => Alignment::HORIZONTAL_CENTER]
+    ]);
+    
+    $this->autoSizeColumns($sheet);
+    
+    return $spreadsheet;
+}
 
     private function saveSpreadsheet($spreadsheet, $path)
     {
