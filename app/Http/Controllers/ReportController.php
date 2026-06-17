@@ -32,16 +32,20 @@ class ReportController extends Controller
         ->orderBy('month', 'desc')
         ->get();
         
-        // Get invoices for selected month/year
-        $invoices = GeneratedInvoice::with('email')
+        // ========== FIX: Get ONLY LATEST revisions ==========
+        // Get all invoices for the month
+        $allInvoices = GeneratedInvoice::with('email')
             ->whereYear('invoice_date', $year)
             ->whereMonth('invoice_date', $month)
             ->orderBy('invoice_date', 'asc')
             ->get();
         
+        // Filter to keep only the latest revision for each original invoice
+        $latestInvoices = $this->getLatestRevisions($allInvoices);
+        
         // Prepare report data
         $reportData = [];
-        foreach ($invoices as $invoice) {
+        foreach ($latestInvoices as $invoice) {
             $reportData[] = [
                 'month' => date('M-y', strtotime($invoice->invoice_date)),
                 'date' => date('d/m/Y', strtotime($invoice->invoice_date)),
@@ -56,14 +60,16 @@ class ReportController extends Controller
                 'travel_date' => $this->getTravelDates($invoice->email),
                 'sales_person' => $invoice->sales_person ?? 'NA',
                 'gst_no' => $invoice->gst_number ?? 'NA',
+                'revision_number' => $invoice->revision_number ?? 0,
+                'is_revision' => $invoice->is_revision ?? false,
             ];
         }
         
         // Summary statistics
         $summary = [
-            'total_invoices' => $invoices->count(),
-            'total_amount' => $invoices->sum('grand_total'),
-            'currency' => $invoices->first() ? $invoices->first()->currency : 'USD',
+            'total_invoices' => $latestInvoices->count(),
+            'total_amount' => $latestInvoices->sum('grand_total'),
+            'currency' => $latestInvoices->first() ? $latestInvoices->first()->currency : 'USD',
             'month_name' => date('F Y', strtotime("$year-$month-01")),
             'year' => $year,
             'month' => $month,
@@ -77,13 +83,17 @@ class ReportController extends Controller
         $startDate = $request->start_date ?? date('Y-m-01');
         $endDate = $request->end_date ?? date('Y-m-t');
         
-        $invoices = GeneratedInvoice::with('email')
+        // Get all invoices within date range
+        $allInvoices = GeneratedInvoice::with('email')
             ->whereBetween('invoice_date', [$startDate, $endDate])
             ->orderBy('invoice_date', 'asc')
             ->get();
         
+        // Filter to keep only the latest revision for each original invoice
+        $latestInvoices = $this->getLatestRevisions($allInvoices);
+        
         $reportData = [];
-        foreach ($invoices as $invoice) {
+        foreach ($latestInvoices as $invoice) {
             $reportData[] = [
                 'month' => date('M-y', strtotime($invoice->invoice_date)),
                 'date' => date('d/m/Y', strtotime($invoice->invoice_date)),
@@ -98,13 +108,15 @@ class ReportController extends Controller
                 'travel_date' => $this->getTravelDates($invoice->email),
                 'sales_person' => $invoice->sales_person ?? 'NA',
                 'gst_no' => $invoice->gst_number ?? 'NA',
+                'revision_number' => $invoice->revision_number ?? 0,
+                'is_revision' => $invoice->is_revision ?? false,
             ];
         }
         
         $summary = [
-            'total_invoices' => $invoices->count(),
-            'total_amount' => $invoices->sum('grand_total'),
-            'currency' => $invoices->first() ? $invoices->first()->currency : 'USD',
+            'total_invoices' => $latestInvoices->count(),
+            'total_amount' => $latestInvoices->sum('grand_total'),
+            'currency' => $latestInvoices->first() ? $latestInvoices->first()->currency : 'USD',
             'start_date' => date('d/m/Y', strtotime($startDate)),
             'end_date' => date('d/m/Y', strtotime($endDate)),
         ];
@@ -112,18 +124,48 @@ class ReportController extends Controller
         return view('reports.date-wise', compact('reportData', 'summary', 'startDate', 'endDate'));
     }
 
+    /**
+     * Get only the latest revision for each invoice
+     * Groups by original_invoice_number and keeps the one with highest revision_number
+     */
+    protected function getLatestRevisions($invoices)
+    {
+        $grouped = [];
+        
+        foreach ($invoices as $invoice) {
+            // Determine the key for grouping
+            // If it has original_invoice_number, use that
+            // Otherwise use invoice_number without revision suffix
+            if ($invoice->original_invoice_number) {
+                $key = $invoice->original_invoice_number;
+            } else {
+                // Remove revision suffix (R1, R2, etc.)
+                $key = preg_replace('/R\d+$/i', '', $invoice->invoice_number);
+            }
+            
+            // If this key doesn't exist yet, or this invoice has higher revision number
+            if (!isset($grouped[$key]) || $invoice->revision_number > $grouped[$key]->revision_number) {
+                $grouped[$key] = $invoice;
+            }
+        }
+        
+        return collect(array_values($grouped));
+    }
+
     public function exportMonthWise(Request $request)
     {
         $month = $request->month ?? date('m');
         $year = $request->year ?? date('Y');
         
-        $invoices = GeneratedInvoice::with('email')
+        $allInvoices = GeneratedInvoice::with('email')
             ->whereYear('invoice_date', $year)
             ->whereMonth('invoice_date', $month)
             ->orderBy('invoice_date', 'asc')
             ->get();
         
-        return $this->exportExcel($invoices, 'Month_Wise_Report_' . date('M_Y', strtotime("$year-$month-01")));
+        $latestInvoices = $this->getLatestRevisions($allInvoices);
+        
+        return $this->exportExcel($latestInvoices, 'Month_Wise_Report_' . date('M_Y', strtotime("$year-$month-01")));
     }
 
     public function exportDateWise(Request $request)
@@ -131,12 +173,14 @@ class ReportController extends Controller
         $startDate = $request->start_date ?? date('Y-m-01');
         $endDate = $request->end_date ?? date('Y-m-t');
         
-        $invoices = GeneratedInvoice::with('email')
+        $allInvoices = GeneratedInvoice::with('email')
             ->whereBetween('invoice_date', [$startDate, $endDate])
             ->orderBy('invoice_date', 'asc')
             ->get();
         
-        return $this->exportExcel($invoices, 'Date_Wise_Report_' . date('d_m_Y', strtotime($startDate)) . '_to_' . date('d_m_Y', strtotime($endDate)));
+        $latestInvoices = $this->getLatestRevisions($allInvoices);
+        
+        return $this->exportExcel($latestInvoices, 'Date_Wise_Report_' . date('d_m_Y', strtotime($startDate)) . '_to_' . date('d_m_Y', strtotime($endDate)));
     }
 
     protected function exportExcel($invoices, $filename)
@@ -148,7 +192,7 @@ class ReportController extends Controller
         $headers = [
             'Month', 'Date', 'Invoice #', 'CNTL', 'Agent Name', 'Guest Name',
             'Amount', 'Currency', 'File Handler', 'Tour Start Date',
-            'Travel Date', 'Sales Person', 'GST No'
+            'Travel Date', 'Sales Person', 'GST No', 'Revision'
         ];
         
         // Set headers
@@ -176,11 +220,12 @@ class ReportController extends Controller
             $sheet->setCellValue($col++ . $row, $this->getTravelDates($invoice->email));
             $sheet->setCellValue($col++ . $row, $invoice->sales_person ?? 'NA');
             $sheet->setCellValue($col++ . $row, $invoice->gst_number ?? 'NA');
+            $sheet->setCellValue($col++ . $row, $invoice->is_revision ? 'R' . $invoice->revision_number : 'Original');
             $row++;
         }
         
         // Auto-size columns
-        foreach (range('A', 'M') as $col) {
+        foreach (range('A', 'N') as $col) {
             $sheet->getColumnDimension($col)->setAutoSize(true);
         }
         
