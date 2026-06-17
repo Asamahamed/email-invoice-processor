@@ -48,20 +48,23 @@ class PnlEmailService
         return false;
     }
     
-    public function fetchPnLEmails()
+public function fetchPnLEmails()
 {
     try {
-
         $allMessages = [];
+        $nextLink = null;
+        $pageCount = 0;
+        $maxPages = 10;
 
+        // Fetch emails with NEWEST FIRST
         $url = 'https://graph.microsoft.com/v1.0/users/' . env('GRAPH_PNL_USER') . '/messages'
             . '?$top=100'
-            . '&$orderby=receivedDateTime desc'
+            . '&$orderby=receivedDateTime desc'  // NEWEST FIRST
             . '&$select=id,subject,body,bodyPreview,from,receivedDateTime,isRead,hasAttachments';
 
         do {
-
             $response = Http::withToken($this->accessToken)
+                ->timeout(120)
                 ->get($url);
 
             if (!$response->ok()) {
@@ -70,61 +73,75 @@ class PnlEmailService
             }
 
             $data = $response->json();
-
             $messages = $data['value'] ?? [];
-
             $allMessages = array_merge($allMessages, $messages);
+            
+            $nextLink = $data['@odata.nextLink'] ?? null;
+            $pageCount++;
+            
+            Log::info("Page {$pageCount}: " . count($messages) . " emails (Total: " . count($allMessages) . ")");
 
-            Log::info('Fetched page mails: ' . count($messages));
+            if ($pageCount >= $maxPages) break;
+            if ($nextLink) usleep(500000);
 
-            // next page url
-            $url = $data['@odata.nextLink'] ?? null;
+        } while ($nextLink);
 
-        } while ($url);
+        Log::info('Total emails fetched: ' . count($allMessages));
 
-        Log::info('Total mails fetched from Graph: ' . count($allMessages));
-
-        $newCount = 0;
+        // Get current max S.No
         $sno = PnlRecord::max('sno') ?? 0;
+        $newCount = 0;
+        $failedEmails = [];
 
+        // Process emails in the order they were fetched (NEWEST FIRST)
         foreach ($allMessages as $message) {
+            $subject = $message['subject'] ?? 'No Subject';
+            
+            // Skip non-PNL
+            if (stripos($subject, 'PNL:') === false) {
+                Log::info("⏭️ Skipping non-PNL: " . $subject);
+                continue;
+            }
 
-            $existing = PnlRecord::where(
-                'message_id',
-                $message['id']
-            )->first();
+            // Check if already exists
+            $existing = PnlRecord::where('message_id', $message['id'])->first();
 
             if (!$existing) {
-
                 $sno++;
-
-                $saved = $this->savePnLEmail(
-                    $message,
-                    $sno
-                );
-
-                if ($saved) {
-                    $newCount++;
-
-                    Log::info(
-                        'Saved: ' .
-                        ($message['subject'] ?? 'No Subject')
-                    );
+                Log::info("📝 Processing: " . $subject . " (S.No: " . $sno . ")");
+                
+                try {
+                    $saved = $this->savePnLEmail($message, $sno);
+                    if ($saved) {
+                        $newCount++;
+                        Log::info("✅ Saved: " . $subject);
+                    } else {
+                        $failedEmails[] = $subject;
+                        Log::error("❌ FAILED to save: " . $subject);
+                    }
+                } catch (\Exception $e) {
+                    $failedEmails[] = $subject;
+                    Log::error("❌ EXCEPTION saving: " . $subject . " - " . $e->getMessage());
+                    Log::error($e->getTraceAsString());
                 }
+            } else {
+                Log::info("⏭️ Already exists: " . $subject);
             }
         }
 
-        Log::info("New mails inserted: {$newCount}");
+        Log::info("📊 FINAL SUMMARY:");
+        Log::info("  ✅ New emails saved: " . $newCount);
+        Log::info("  ❌ Failed emails: " . count($failedEmails));
+        
+        if (!empty($failedEmails)) {
+            Log::info("  Failed subjects: " . implode(', ', array_slice($failedEmails, 0, 10)));
+        }
 
         return $newCount;
 
     } catch (\Exception $e) {
-
-        Log::error(
-            'Error fetching PnL emails: ' .
-            $e->getMessage()
-        );
-
+        Log::error('Error fetching PnL emails: ' . $e->getMessage());
+        Log::error($e->getTraceAsString());
         return 0;
     }
 }
@@ -218,24 +235,30 @@ protected function savePnLEmail($message, $sno)
             }
         }
         
-        // 2. Transport - Country specific
-      // 2. Transport - Extract INDIVIDUAL ITEMS
-$transportItems = $this->extractTransportItemsForCountry($htmlBody, $plainText, $countryCode);
+        // 2. Transport - Extract INDIVIDUAL ITEMS
+        $transportItems = $this->extractTransportItemsForCountry($htmlBody, $plainText, $countryCode);
 
-if (!empty($transportItems)) {
-    $categoriesFound[] = 'Transport';
-    foreach ($transportItems as $transport) {
-        $pnlItemsToSave[] = [
-            'type' => 'TRANSPORT',
-            'service_name' => $transport['service_name'],
-            'hotel_name' => null,
-            'amount' => $transport['amount'],
-            'details' => $transport['details']
-        ];
-        Log::info("✅ Added transport item: {$transport['service_name']} - \${$transport['amount']}");
-    }
-}
-        // 3. Other Rates - Country specific (ONLY ONE BLOCK!)
+        if (!empty($transportItems)) {
+            $categoriesFound[] = 'Transport';
+            foreach ($transportItems as $transport) {
+                $pnlItemsToSave[] = [
+                    'type' => 'TRANSPORT',
+                    'service_name' => $transport['service_name'],
+                    'hotel_name' => null,
+                    'amount' => $transport['amount'],
+                    'details' => $transport['details']
+                ];
+                Log::info("✅ Added transport item: {$transport['service_name']} - \${$transport['amount']}");
+            }
+        }
+        
+        // ✅ FIX 1: Calculate transport total
+        $transportTotal = 0;
+        foreach ($transportItems as $item) {
+            $transportTotal += $item['amount'];
+        }
+        
+        // 3. Other Rates - Country specific
         $otherRatesTotal = 0;
         if ($countryCode == 'VN' || $countryCode == 'SG' || $countryCode == 'MY') {
             $otherRatesTotal = $this->extractOtherRatesTotalForSouthEastAsia($htmlBody);
@@ -246,6 +269,7 @@ if (!empty($transportItems)) {
             $otherRatesTotal = $this->extractOtherRatesTotalFromEmail($plainText);
         }
         
+        // ✅ FIX 2: Use $transportTotal which is now defined
         if ($otherRatesTotal > 0 && $otherRatesTotal != $transportTotal) {
             $categoriesFound[] = 'Other Rates';
             $pnlItemsToSave[] = [
@@ -1074,7 +1098,7 @@ public function fetchAllPnLEmailsInBackground()
         $maxPages = 50;
 
         $url = 'https://graph.microsoft.com/v1.0/users/' . env('GRAPH_PNL_USER') . '/messages'
-            . '?$top=100'
+            . '?$top=200'
             . '&$orderby=receivedDateTime desc'
             . '&$select=id,subject,bodyPreview,from,receivedDateTime,isRead,hasAttachments';
 
