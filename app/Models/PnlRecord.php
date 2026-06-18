@@ -41,6 +41,9 @@ class PnlRecord extends Model
         'credit_type',
         'classification_reason',
           'profit_loss',
+              'total_pax',
+    'total_nights',
+
     ];
 
     protected $casts = [

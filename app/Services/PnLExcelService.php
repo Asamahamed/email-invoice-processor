@@ -38,77 +38,80 @@ class PnLExcelService
     'N' => 'Remarks'
 ];
 
-    public function processAndUpdateExcel(PnlRecord $record)
-    {
-        try {
-            Log::info("Processing PnL Email ID: " . $record->id);
-            $profitLossFromEmail = $record->profit_loss;
-            Log::info("Profit/Loss from database: " . ($profitLossFromEmail ?? 'null'));
+public function processAndUpdateExcel(PnlRecord $record)
+{
+    try {
+        Log::info("Processing PnL Email ID: " . $record->id);
+        $profitLossFromEmail = $record->profit_loss;
+        Log::info("Profit/Loss from database: " . ($profitLossFromEmail ?? 'null'));
+        
+        $items = PnlItem::where('pnl_record_id', $record->id)->get();
+        
+        if ($items->isEmpty()) {
+            return [
+                'success' => false,
+                'message' => 'No items found in database. Please fetch emails first.'
+            ];
+        }
+        
+        $countryCode = $record->country_code ?? 'VN';
+        $exchangeRate = $this->exchangeRates[$countryCode] ?? 25500;
+        $tourRef = $record->tour_ref;
+        $invoiceNumber = $record->invoice_number;
+        $agentName = $record->agent_name;
+        $startDate = $record->start_date ?? date('Y-m-d');
+        $endDate = $record->end_date ?? date('Y-m-d');
+        
+        // Build items for Excel from database
+        $allItems = [];
+        $sno = 1;
+        
+        foreach ($items as $item) {
+            $remarks = '';
+            $itemDetails = json_decode($item->item_details, true);
             
-            $items = PnlItem::where('pnl_record_id', $record->id)->get();
+            // ✅ FIX: Use service_name for description
+            $description = $item->service_name ?? $item->type;
             
-            if ($items->isEmpty()) {
-                return [
-                    'success' => false,
-                    'message' => 'No items found in database. Please fetch emails first.'
-                ];
+            // For hotels, use hotel_name if available
+            if ($item->type == 'HOTEL') {
+                $description = $item->hotel_name ?? $item->service_name ?? $item->type;
             }
             
-            $countryCode = $record->country_code ?? 'VN';
-            $exchangeRate = $this->exchangeRates[$countryCode] ?? 25500;
-            $tourRef = $record->tour_ref;
-            $invoiceNumber = $record->invoice_number;
-            $agentName = $record->agent_name;
-            $startDate = $record->start_date ?? date('Y-m-d');
-            $endDate = $record->end_date ?? date('Y-m-d');
+            $amount = $item->amount_original;
+            if ($item->type != 'INVOICE') {
+                $amount = -abs($amount);
+            }
             
-            // Build items for Excel from database
-            $allItems = [];
-            $sno = 1;
+            if ($item->type == 'INVOICE') {
+                $remarks = "Pax: {$record->total_pax}, Nights: {$record->total_nights}";
+                $description = 'INVOICE';
+            } elseif ($item->type == 'HOTEL') {
+                $remarks = ($itemDetails['nights'] ?? 1) . ' nights';
+            } elseif ($item->type == 'ATTRACTION') {
+                $remarks = $itemDetails['remarks'] ?? $item->service_name ?? 'Attraction fees';
+            } elseif ($item->type == 'TOUR TRANSFER') {
+                $remarks = $itemDetails['remarks'] ?? 'Tour transfer';
+            } elseif ($item->type == 'TRANSPORT') {
+                $remarks = $itemDetails['remarks'] ?? 'Transport expenses';
+            }
             
-// In processAndUpdateExcel, when building $allItems, make expenses NEGATIVE:
+            $allItems[] = [
+                'sno' => $sno++,
+                'type' => $item->type,
+                'client_name' => $item->client_name ?? '',
+                'description' => $description,  // ✅ Now uses service_name
+                'start_date' => $item->start_date ?? $startDate,
+                'end_date' => $item->end_date ?? $endDate,
+                'credit_type' => $item->credit_type,
+                'agent_name' => $agentName,
+                'amount_usd' => $amount,
+                'exchange_rate' => $exchangeRate,
+                'amount_local' => round($amount * $exchangeRate, 2),
+                'remarks' => $remarks
+            ];
+        }
 
-foreach ($items as $item) {
-    $remarks = '';
-    $itemDetails = json_decode($item->item_details, true);
-    
-    $description = $item->type;
-    if ($item->type == 'HOTEL') {
-        $description = $item->hotel_name ?? $item->service_name ?? $item->type;
-    }
-    
-    $amount = $item->amount_original;
-    if ($item->type != 'INVOICE') {
-        $amount = -abs($amount);
-    }
-    
-    if ($item->type == 'INVOICE') {
-        $remarks = "Pax: {$record->total_pax}, Nights: {$record->total_nights}";
-    } elseif ($item->type == 'HOTEL') {
-        $remarks = ($itemDetails['nights'] ?? 1) . ' nights';
-    } elseif ($item->type == 'ATTRACTION') {
-        $remarks = $itemDetails['remarks'] ?? $item->service_name;
-    } elseif ($item->type == 'TOUR TRANSFER') {
-        $remarks = 'Total tour transfer expenses';
-    } elseif ($item->type == 'TRANSPORT') {
-        $remarks = 'Total transport expenses';
-    }
-    
-    $allItems[] = [
-        'sno' => $sno++,
-        'type' => $item->type,
-        'client_name' => $item->client_name ?? '',  // ✅ NEW
-        'description' => $description,
-        'start_date' => $item->start_date ?? $startDate,
-        'end_date' => $item->end_date ?? $endDate,
-        'credit_type' => $item->credit_type,
-        'agent_name' => $agentName,
-        'amount_usd' => $amount,
-        'exchange_rate' => $exchangeRate,
-        'amount_local' => round($amount * $exchangeRate, 2),
-        'remarks' => $remarks
-    ];
-}
             
             Log::info("Total items to insert: " . count($allItems));
             
