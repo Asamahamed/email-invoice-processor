@@ -79,50 +79,52 @@ class ReportController extends Controller
     }
 
     public function dateWise(Request $request)
-    {
-        $startDate = $request->start_date ?? date('Y-m-01');
-        $endDate = $request->end_date ?? date('Y-m-t');
-        
-        // Get all invoices within date range
-        $allInvoices = GeneratedInvoice::with('email')
-            ->whereBetween('invoice_date', [$startDate, $endDate])
-            ->orderBy('invoice_date', 'asc')
-            ->get();
-        
-        // Filter to keep only the latest revision for each original invoice
-        $latestInvoices = $this->getLatestRevisions($allInvoices);
-        
-        $reportData = [];
-        foreach ($latestInvoices as $invoice) {
-            $reportData[] = [
-                'month' => date('M-y', strtotime($invoice->invoice_date)),
-                'date' => date('d/m/Y', strtotime($invoice->invoice_date)),
-                'invoice_number' => $invoice->invoice_number,
-                'tour_ref' => $invoice->tour_ref,
-                'agent_name' => $invoice->customer_name,
-                'guest_name' => $invoice->guest_name,
-                'amount' => $invoice->grand_total,
-                'currency' => $invoice->currency,
-                'file_handler' => $invoice->email->file_handler ?? 'NA',
-                'tour_start_date' => $invoice->email->travel_start_date ? date('d/m/Y', strtotime($invoice->email->travel_start_date)) : 'NA',
-                'travel_date' => $this->getTravelDates($invoice->email),
-                'sales_person' => $invoice->sales_person ?? 'NA',
-                'gst_no' => $invoice->gst_number ?? 'NA',
-                'revision_number' => $invoice->revision_number ?? 0,
-                'is_revision' => $invoice->is_revision ?? false,
-            ];
-        }
-        
-        $summary = [
-            'total_invoices' => $latestInvoices->count(),
-            'total_amount' => $latestInvoices->sum('grand_total'),
-            'currency' => $latestInvoices->first() ? $latestInvoices->first()->currency : 'USD',
-            'start_date' => date('d/m/Y', strtotime($startDate)),
-            'end_date' => date('d/m/Y', strtotime($endDate)),
+{
+    $startDate = $request->start_date ?? date('Y-m-01');
+    $endDate = $request->end_date ?? date('Y-m-t');
+    
+    // Get all invoices within date range based on TRAVEL START DATE
+    $allInvoices = GeneratedInvoice::with('email')
+        ->whereHas('email', function($query) use ($startDate, $endDate) {
+            $query->whereBetween('travel_start_date', [$startDate, $endDate]);
+        })
+        ->orderBy('invoice_date', 'asc')
+        ->get();
+    
+    // Filter to keep only the latest revision for each original invoice
+    $latestInvoices = $this->getLatestRevisions($allInvoices);
+    
+    $reportData = [];
+    foreach ($latestInvoices as $invoice) {
+        $reportData[] = [
+            'month' => date('M-y', strtotime($invoice->invoice_date)),
+            'date' => date('d/m/Y', strtotime($invoice->invoice_date)),
+            'invoice_number' => $invoice->invoice_number,
+            'tour_ref' => $invoice->tour_ref,
+            'agent_name' => $invoice->customer_name,
+            'guest_name' => $invoice->guest_name,
+            'amount' => $invoice->grand_total,
+            'currency' => $invoice->currency,
+            'file_handler' => $invoice->email->file_handler ?? 'NA',
+            'tour_start_date' => $invoice->email->travel_start_date ? date('d/m/Y', strtotime($invoice->email->travel_start_date)) : 'NA',
+            'travel_date' => $this->getTravelDates($invoice->email),
+            'sales_person' => $invoice->sales_person ?? 'NA',
+            'gst_no' => $invoice->gst_number ?? 'NA',
+            'revision_number' => $invoice->revision_number ?? 0,
+            'is_revision' => $invoice->is_revision ?? false,
         ];
-        
-        return view('reports.date-wise', compact('reportData', 'summary', 'startDate', 'endDate'));
     }
+    
+    $summary = [
+        'total_invoices' => $latestInvoices->count(),
+        'total_amount' => $latestInvoices->sum('grand_total'),
+        'currency' => $latestInvoices->first() ? $latestInvoices->first()->currency : 'USD',
+        'start_date' => date('d/m/Y', strtotime($startDate)),
+        'end_date' => date('d/m/Y', strtotime($endDate)),
+    ];
+    
+    return view('reports.date-wise', compact('reportData', 'summary', 'startDate', 'endDate'));
+}
 
     /**
      * Get only the latest revision for each invoice
@@ -168,20 +170,22 @@ class ReportController extends Controller
         return $this->exportExcel($latestInvoices, 'Month_Wise_Report_' . date('M_Y', strtotime("$year-$month-01")));
     }
 
-    public function exportDateWise(Request $request)
-    {
-        $startDate = $request->start_date ?? date('Y-m-01');
-        $endDate = $request->end_date ?? date('Y-m-t');
-        
-        $allInvoices = GeneratedInvoice::with('email')
-            ->whereBetween('invoice_date', [$startDate, $endDate])
-            ->orderBy('invoice_date', 'asc')
-            ->get();
-        
-        $latestInvoices = $this->getLatestRevisions($allInvoices);
-        
-        return $this->exportExcel($latestInvoices, 'Date_Wise_Report_' . date('d_m_Y', strtotime($startDate)) . '_to_' . date('d_m_Y', strtotime($endDate)));
-    }
+   public function exportDateWise(Request $request)
+{
+    $startDate = $request->start_date ?? date('Y-m-01');
+    $endDate = $request->end_date ?? date('Y-m-t');
+    
+    $allInvoices = GeneratedInvoice::with('email')
+        ->whereHas('email', function($query) use ($startDate, $endDate) {
+            $query->whereBetween('travel_start_date', [$startDate, $endDate]);
+        })
+        ->orderBy('invoice_date', 'asc')
+        ->get();
+    
+    $latestInvoices = $this->getLatestRevisions($allInvoices);
+    
+    return $this->exportExcel($latestInvoices, 'Date_Wise_Report_' . date('d_m_Y', strtotime($startDate)) . '_to_' . date('d_m_Y', strtotime($endDate)));
+}
 
     protected function exportExcel($invoices, $filename)
     {
@@ -237,17 +241,18 @@ class ReportController extends Controller
     }
 
     protected function getTravelDates($email)
-    {
-        if (!$email) return 'NA';
-        
-        $start = $email->travel_start_date ? date('d/m/Y', strtotime($email->travel_start_date)) : '';
-        $end = $email->travel_end_date ? date('d/m/Y', strtotime($email->travel_end_date)) : '';
-        
-        if ($start && $end) {
-            return $start . ' - ' . $end;
-        } elseif ($start) {
-            return $start;
-        }
-        return 'NA';
+{
+    if (!$email) return 'NA';
+    
+    $start = $email->travel_start_date ? date('d/m/Y', strtotime($email->travel_start_date)) : '';
+    $end = $email->travel_end_date ? date('d/m/Y', strtotime($email->travel_end_date)) : '';
+    
+    // If both exist and are different, show range
+    if ($start && $end && $start !== $end) {
+        return $start . ' - ' . $end;
+    } elseif ($start) {
+        return $start;
     }
+    return 'NA';
+}
 }
