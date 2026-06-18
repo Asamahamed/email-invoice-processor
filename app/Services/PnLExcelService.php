@@ -526,4 +526,93 @@ private function loadOrCreateSpreadsheet($path, $countryCode)
             return '<div class="alert alert-danger">Error loading Excel file: ' . $e->getMessage() . '</div>';
         }
     }
+    public function getRecordPreview($record)
+{
+    try {
+        $items = $record->items;
+        $exchangeRate = $this->exchangeRates[$record->country_code ?? 'VN'] ?? 25500;
+        
+        if ($items->isEmpty()) {
+            return '<div class="alert alert-warning">No items found for this record.</div>';
+        }
+        
+        $html = '<div class="table-responsive"><table class="table table-bordered table-striped table-sm">';
+        $html .= '<thead class="table-dark"><tr>';
+        
+        $headers = ['S.No', 'Tour Number', 'Invoice Number', 'Client Name', 'Type', 'Start Date', 'End Date', 
+                   'Credit Type', 'Agent Name', 'Description', 'Amount (USD)', 'Exchange Rate', 'Amount (Local)', 'Remarks'];
+        
+        foreach ($headers as $header) {
+            $html .= '<th>' . htmlspecialchars($header) . '</th>';
+        }
+        $html .= '</tr></thead><tbody>';
+        
+        $sno = 1;
+        foreach ($items as $item) {
+            $html .= '<tr>';
+            $html .= '<td>' . $sno++ . '</td>';
+            $html .= '<td>' . ($record->tour_ref ?? '-') . '</td>';
+            $html .= '<td>' . ($record->invoice_number ?? '-') . '</td>';
+            $html .= '<td>' . ($item->client_name ?? $record->vendor_name ?? '') . '</td>';
+            $html .= '<td>' . $item->type . '</td>';
+            $html .= '<td>' . ($item->start_date ?? $record->start_date ?? '') . '</td>';
+            $html .= '<td>' . ($item->end_date ?? $record->end_date ?? '') . '</td>';
+            $html .= '<td>' . ($item->credit_type ?? 'Credit') . '</td>';
+            $html .= '<td>' . ($record->agent_name ?? '-') . '</td>';
+            
+            // Description - use service_name
+            $description = $item->service_name ?? $item->type;
+            if ($item->type == 'HOTEL' && empty($description)) {
+                $description = $item->hotel_name ?? $item->type;
+            }
+            $html .= '<td>' . htmlspecialchars($description) . '</td>';
+            
+            $amount = $item->amount_original;
+            if ($item->type != 'INVOICE') {
+                $amount = -abs($amount);
+            }
+            $html .= '<td>' . ($amount >= 0 ? number_format($amount, 2) : '(' . number_format(abs($amount), 2) . ')') . '</td>';
+            $html .= '<td>' . $exchangeRate . '</td>';
+            $html .= '<td>' . number_format($amount * $exchangeRate, 2) . '</td>';
+            
+            $itemDetails = json_decode($item->item_details, true);
+            $remarks = '';
+            if ($item->type == 'INVOICE') {
+                $remarks = "Pax: {$record->total_pax}, Nights: {$record->total_nights}";
+            } elseif ($item->type == 'HOTEL') {
+                $remarks = ($itemDetails['nights'] ?? 1) . ' nights';
+            } else {
+                $remarks = $itemDetails['remarks'] ?? '';
+            }
+            $html .= '<td>' . htmlspecialchars($remarks) . '</td>';
+            $html .= '</tr>';
+        }
+        
+        // Profit/Loss row
+        if ($record->profit_loss !== null) {
+            $pl = $record->profit_loss;
+            $html .= '<tr style="background-color: #FFF3CD; font-weight: bold;">';
+            $html .= '<td></td>';
+            $html .= '<td>' . ($record->tour_ref ?? '-') . '</td>';
+            $html .= '<td>' . ($record->invoice_number ?? '-') . '</td>';
+            $html .= '<td></td>';
+            $html .= '<td>PROFIT / (LOSS)</td>';
+            $html .= '<td></td><td></td><td></td>';
+            $html .= '<td>' . ($record->agent_name ?? '-') . '</td>';
+            $html .= '<td></td>';
+            $html .= '<td>' . ($pl >= 0 ? number_format($pl, 2) : '(' . number_format(abs($pl), 2) . ')') . '</td>';
+            $html .= '<td>' . $exchangeRate . '</td>';
+            $html .= '<td>' . number_format($pl * $exchangeRate, 2) . '</td>';
+            $html .= '<td>' . ($pl >= 0 ? 'Profit' : 'Loss') . '</td>';
+            $html .= '</tr>';
+        }
+        
+        $html .= '</tbody></table></div>';
+        return $html;
+        
+    } catch (\Exception $e) {
+        Log::error('Record preview error: ' . $e->getMessage());
+        return '<div class="alert alert-danger">Error loading record: ' . $e->getMessage() . '</div>';
+    }
+}
 }

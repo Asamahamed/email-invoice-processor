@@ -32,9 +32,11 @@ Route::prefix('pnl')->name('pnl.')->group(function () {
     Route::get('/export', [PnlController::class, 'exportToExcel'])->name('export');  // Overall Export
     Route::get('/export-country/{country}', [PnlController::class, 'exportByCountry'])->name('export-country');  // Country-based Export
     Route::post('/update-excel', [PnlController::class, 'updateExcel'])->name('update-excel');
-    Route::get('/view-excel/{country}', [PnlController::class, 'viewExcel'])->name('view-excel');
+    // Route::get('/view-excel/{country}', [PnlController::class, 'viewExcel'])->name('view-excel');
+    Route::get('/view-excel/{country}/{id?}', [PnlController::class, 'viewExcel'])->name('view-excel');
     Route::get('/export-country-approved/{country}', [PnlController::class, 'exportByCountryApproved'])->name('export-country-approved');
-    Route::post('/export-selected', [PnlController::class, 'exportSelected'])->name('export.selected');
+   Route::match(['get', 'post'], '/export-selected', [PnlController::class, 'exportSelected'])->name('export.selected');
+    Route::get('/view-selected', [PnlController::class, 'viewSelected'])->name('view-selected');
 });
 
 Route::get('/test-mail', function () {

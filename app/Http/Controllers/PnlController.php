@@ -466,25 +466,43 @@ public function updateExcel(Request $request)
 }
 
 /**
- * View Excel file in browser
+ * View Excel file in browser - For specific record or whole country
  */
-public function viewExcel($country)
+public function viewExcel($country, $id = null)
 {
     try {
         $excelService = new PnLExcelService();
-        $html = $excelService->getExcelPreview($country);
         
-        $countryNames = [
-            'SG' => 'Singapore',
-            'MY' => 'Malaysia',
-            'VN' => 'Vietnam',
-            'LK' => 'Sri Lanka'
-        ];
-        
-        $countryName = $countryNames[$country] ?? $country;
-        
-        
-        return view('pnl.excel-preview', compact('html', 'countryName', 'country'));
+        // If ID is provided, show specific record preview
+        if ($id) {
+            $record = PnlRecord::with('items')->findOrFail($id);
+            $html = $excelService->getRecordPreview($record);
+            
+            // Get record details for title
+            $countryNames = [
+                'SG' => 'Singapore',
+                'MY' => 'Malaysia',
+                'VN' => 'Vietnam',
+                'LK' => 'Sri Lanka'
+            ];
+            $countryName = $countryNames[$country] ?? $country;
+            $recordTitle = $record->tour_ref ? " - {$record->tour_ref}" : '';
+            
+            return view('pnl.excel-preview', compact('html', 'countryName', 'country', 'record'));
+        } else {
+            // Show full country Excel
+            $html = $excelService->getExcelPreview($country);
+            
+            $countryNames = [
+                'SG' => 'Singapore',
+                'MY' => 'Malaysia',
+                'VN' => 'Vietnam',
+                'LK' => 'Sri Lanka'
+            ];
+            $countryName = $countryNames[$country] ?? $country;
+            
+            return view('pnl.excel-preview', compact('html', 'countryName', 'country'));
+        }
         
     } catch (\Exception $e) {
         Log::error('View Excel failed: ' . $e->getMessage());
@@ -493,11 +511,59 @@ public function viewExcel($country)
 }
 
 /**
- * Export by specific country (for excel-preview page)
+ * Get HTML preview for a single record
  */
 /**
- * Export by specific country (for excel-preview page)
+ * View selected records together
  */
+public function viewSelected(Request $request)
+{
+    try {
+        $ids = explode(',', $request->ids);
+        $records = PnlRecord::with('items')->whereIn('id', $ids)->get();
+        
+        if ($records->isEmpty()) {
+            return redirect()->back()->with('error', 'No records found.');
+        }
+        
+        $excelService = new PnLExcelService();
+        $html = '';
+        $totalRecords = $records->count();
+        $recordIndex = 1;
+        
+        foreach ($records as $record) {
+            $html .= '<div class="record-section mb-5">';
+            $html .= '<div class="record-header">';
+            $html .= '<h3 class="record-title">Record ' . $recordIndex . ' of ' . $totalRecords . '</h3>';
+            $html .= '<div class="record-meta">';
+            $html .= '<span class="badge bg-primary me-2">' . ($record->tour_ref ?? 'N/A') . '</span>';
+            $html .= '<span class="badge bg-secondary me-2">' . ($record->country_code ?? '') . '</span>';
+            $html .= '<span class="badge bg-info">$' . number_format($record->amount, 2) . '</span>';
+            $html .= '</div>';
+            $html .= '</div>';
+            
+            // Get record preview HTML
+            $html .= $excelService->getRecordPreview($record);
+            $html .= '</div>';
+            $recordIndex++;
+        }
+        
+        $country = $records->first()->country_code ?? 'VN';
+        $countryNames = [
+            'SG' => 'Singapore',
+            'MY' => 'Malaysia',
+            'VN' => 'Vietnam',
+            'LK' => 'Sri Lanka'
+        ];
+        $countryName = $countryNames[$country] ?? $country;
+        
+        return view('pnl.selected-view', compact('html', 'countryName', 'country', 'records'));
+        
+    } catch (\Exception $e) {
+        Log::error('View selected failed: ' . $e->getMessage());
+        return redirect()->back()->with('error', 'Failed to load selected records: ' . $e->getMessage());
+    }
+}
 public function exportByCountry($country, Request $request)
 {
     try {
@@ -1000,16 +1066,50 @@ private function formatAmountForExport($amount)
 /**
  * Export selected PnL records
  */
-/**
- * Export selected PnL records
- */
 public function exportSelected(Request $request)
 {
     try {
-        $ids = $request->ids;
+        // Handle both POST and GET requests
+        $ids = $request->input('ids');
+        
+        // If it's a GET request, IDs might be a comma-separated string
+        if (empty($ids) && $request->has('ids')) {
+            $ids = $request->query('ids');
+            if (is_string($ids)) {
+                $ids = explode(',', $ids);
+            }
+        }
+        
+        // If still empty, check if it's a JSON string
+        if (empty($ids) && $request->has('ids')) {
+            $ids = $request->ids;
+            if (is_string($ids) && strpos($ids, ',') !== false) {
+                $ids = explode(',', $ids);
+            }
+        }
         
         if (empty($ids)) {
+            // If it's a GET request from selected-view, redirect back with error
+            if ($request->isMethod('get')) {
+                return redirect()->back()->with('error', 'No records selected to export.');
+            }
             return response()->json(['success' => false, 'message' => 'No records selected'], 400);
+        }
+        
+        // Convert to array if it's a string
+        if (is_string($ids)) {
+            $ids = explode(',', $ids);
+        }
+        
+        // Ensure IDs are integers
+        $ids = array_map('intval', $ids);
+        $ids = array_filter($ids);
+        
+        if (empty($ids)) {
+            if ($request->isMethod('get')) {
+                return redirect()->back()->with('error', 'Invalid record IDs.');
+            }
+            return response()->json(['success' => false, 'message' => 'Invalid record IDs'], 400);
         }
         
         $records = PnlRecord::with('items')
@@ -1018,6 +1118,9 @@ public function exportSelected(Request $request)
             ->get();
         
         if ($records->isEmpty()) {
+            if ($request->isMethod('get')) {
+                return redirect()->back()->with('error', 'No records found.');
+            }
             return response()->json(['success' => false, 'message' => 'No records found'], 404);
         }
         
@@ -1029,12 +1132,12 @@ public function exportSelected(Request $request)
         $sheet = $spreadsheet->getActiveSheet();
         $sheet->setTitle('Selected PnL');
         
-        // ✅ UPDATED HEADERS WITH CLIENT NAME
+        // Headers
         $headers = [
             'A1' => 'S.No',
             'B1' => 'Tour Number',
             'C1' => 'Invoice Number',
-            'D1' => 'Client Name',        // ✅ NEW
+            'D1' => 'Client Name',
             'E1' => 'Type',
             'F1' => 'Start Date',
             'G1' => 'End Date',
@@ -1051,7 +1154,6 @@ public function exportSelected(Request $request)
             $sheet->setCellValue($cell, $value);
         }
         
-        // ✅ UPDATED RANGE TO N
         $sheet->getStyle('A1:N1')->applyFromArray([
             'font' => ['bold' => true, 'color' => ['rgb' => 'FFFFFF']],
             'fill' => ['fillType' => \PhpOffice\PhpSpreadsheet\Style\Fill::FILL_SOLID, 'startColor' => ['rgb' => '4472C4']],
@@ -1082,14 +1184,12 @@ public function exportSelected(Request $request)
             if ($items->isEmpty()) {
                 $startDate = $record->start_date ?? ($record->received_at ? $record->received_at->format('Y-m-d') : date('Y-m-d'));
                 $endDate = $record->end_date ?? ($record->received_at ? $record->received_at->format('Y-m-d') : date('Y-m-d'));
-                
                 $remarks = "Pax: {$record->total_pax}, Nights: {$record->total_nights}";
                 
-                // ✅ UPDATED WITH CLIENT NAME
                 $sheet->setCellValue("A{$row}", $globalSno++);
                 $sheet->setCellValue("B{$row}", $tourRef ?? '-');
                 $sheet->setCellValue("C{$row}", $invoiceNumber ?? '-');
-                $sheet->setCellValue("D{$row}", $record->vendor_name ?? '');  // Client Name
+                $sheet->setCellValue("D{$row}", $record->vendor_name ?? '');
                 $sheet->setCellValue("E{$row}", 'INVOICE');
                 $sheet->setCellValue("F{$row}", $startDate);
                 $sheet->setCellValue("G{$row}", $endDate);
@@ -1108,49 +1208,42 @@ public function exportSelected(Request $request)
                 }
                 $row++;
             } else {
-              foreach ($items as $item) {
-    $remarks = '';
-    $itemDetails = json_decode($item->item_details, true);
-    
-    // ✅ Use service_name as description by default
-    $description = $item->service_name ?? $item->type;
-    
-    $amount = $item->amount_original;
-    
-    $startDate = $item->start_date ?? $record->start_date ?? ($record->received_at ? $record->received_at->format('Y-m-d') : date('Y-m-d'));
-    $endDate = $item->end_date ?? $record->end_date ?? ($record->received_at ? $record->received_at->format('Y-m-d') : date('Y-m-d'));
+                foreach ($items as $item) {
+                    $remarks = '';
+                    $itemDetails = json_decode($item->item_details, true);
+                    $description = $item->service_name ?? $item->type;
+                    $amount = $item->amount_original;
+                    
+                    $startDate = $item->start_date ?? $record->start_date ?? ($record->received_at ? $record->received_at->format('Y-m-d') : date('Y-m-d'));
+                    $endDate = $item->end_date ?? $record->end_date ?? ($record->received_at ? $record->received_at->format('Y-m-d') : date('Y-m-d'));
 
-    if ($item->type == 'INVOICE') {
-        $remarks = "Pax: {$record->total_pax}, Nights: {$record->total_nights}";
-        $description = 'INVOICE';
-    } else {
-        $amount = -abs($amount);
-        // For HOTEL, fallback to hotel_name if service_name is empty
-        if ($item->type == 'HOTEL' && empty($description)) {
-            $description = $item->hotel_name ?? $item->type;
-        }
-        // Build remarks
-        if ($item->type == 'HOTEL') {
-            $remarks = ($itemDetails['nights'] ?? 1) . ' nights';
-        } elseif ($item->type == 'ATTRACTION') {
-            $remarks = $itemDetails['remarks'] ?? $item->service_name ?? 'Attraction fees';
-        } elseif ($item->type == 'TOUR TRANSFER') {
-            $remarks = $itemDetails['remarks'] ?? 'Total tour transfer expenses';
-        } elseif ($item->type == 'TRANSPORT') {
-            $remarks = $itemDetails['remarks'] ?? 'Total transport expenses';
-        } elseif ($item->type == 'MEALS') {
-            $remarks = 'Meals expenses';
-        } elseif ($item->type == 'OTHER RATES') {
-            $remarks = $itemDetails['remarks'] ?? 'Other fees';
-        }
-    }
+                    if ($item->type == 'INVOICE') {
+                        $remarks = "Pax: {$record->total_pax}, Nights: {$record->total_nights}";
+                        $description = 'INVOICE';
+                    } else {
+                        $amount = -abs($amount);
+                        if ($item->type == 'HOTEL' && empty($description)) {
+                            $description = $item->hotel_name ?? $item->type;
+                        }
+                        if ($item->type == 'HOTEL') {
+                            $remarks = ($itemDetails['nights'] ?? 1) . ' nights';
+                        } elseif ($item->type == 'ATTRACTION') {
+                            $remarks = $itemDetails['remarks'] ?? $item->service_name ?? 'Attraction fees';
+                        } elseif ($item->type == 'TOUR TRANSFER') {
+                            $remarks = $itemDetails['remarks'] ?? 'Total tour transfer expenses';
+                        } elseif ($item->type == 'TRANSPORT') {
+                            $remarks = $itemDetails['remarks'] ?? 'Total transport expenses';
+                        } elseif ($item->type == 'MEALS') {
+                            $remarks = 'Meals expenses';
+                        } elseif ($item->type == 'OTHER RATES') {
+                            $remarks = $itemDetails['remarks'] ?? 'Other fees';
+                        }
+                    }
 
-
-                    // ✅ UPDATED WITH CLIENT NAME
                     $sheet->setCellValue("A{$row}", $globalSno++);
                     $sheet->setCellValue("B{$row}", $tourRef ?? '-');
                     $sheet->setCellValue("C{$row}", $invoiceNumber ?? '-');
-                    $sheet->setCellValue("D{$row}", $item->client_name ?? $record->vendor_name ?? '');  // Client Name
+                    $sheet->setCellValue("D{$row}", $item->client_name ?? $record->vendor_name ?? '');
                     $sheet->setCellValue("E{$row}", $item->type);
                     $sheet->setCellValue("F{$row}", $startDate);
                     $sheet->setCellValue("G{$row}", $endDate);
@@ -1177,7 +1270,7 @@ public function exportSelected(Request $request)
                 $sheet->setCellValue("A{$row}", '');
                 $sheet->setCellValue("B{$row}", $tourRef ?? '-');
                 $sheet->setCellValue("C{$row}", $invoiceNumber ?? '-');
-                $sheet->setCellValue("D{$row}", '');  // Client Name - blank
+                $sheet->setCellValue("D{$row}", '');
                 $sheet->setCellValue("E{$row}", 'PROFIT / (LOSS)');
                 $sheet->setCellValue("F{$row}", '');
                 $sheet->setCellValue("G{$row}", '');
@@ -1200,12 +1293,12 @@ public function exportSelected(Request $request)
             $row++;
         }
         
-        // ✅ UPDATED: Auto-size columns A to N
+        // Auto-size columns
         foreach (range('A', 'N') as $col) {
             $sheet->getColumnDimension($col)->setAutoSize(true);
         }
         
-        // ✅ UPDATED: Borders A to N
+        // Borders
         $highestRow = $row - 1;
         if ($highestRow >= 2) {
             $sheet->getStyle("A2:N{$highestRow}")->applyFromArray([
@@ -1228,6 +1321,9 @@ public function exportSelected(Request $request)
         
     } catch (\Exception $e) {
         Log::error('Export selected failed: ' . $e->getMessage());
+        if ($request->isMethod('get')) {
+            return redirect()->back()->with('error', 'Failed to export: ' . $e->getMessage());
+        }
         return response()->json([
             'success' => false,
             'message' => 'Failed to export: ' . $e->getMessage()

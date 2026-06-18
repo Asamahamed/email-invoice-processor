@@ -25,23 +25,29 @@
                             <h1 class="excel-title">
                                 Profit & Loss Statement
                             </h1>
-                            <p class="excel-subtitle">
-                                {{ $countryName }} ({{ $country }}) - Detailed Breakdown
-                            </p>
+                            @if (isset($record))
+                                <p class="excel-subtitle">
+                                    {{ $countryName }} ({{ $country }}) - {{ $record->tour_ref ?? 'Record' }}
+                                </p>
+                            @else
+                                <p class="excel-subtitle">
+                                    {{ $countryName }} ({{ $country }}) - Detailed Breakdown
+                                </p>
+                            @endif
                         </div>
                     </div>
                 </div>
-              <div class="d-flex gap-2">
-    <a href="{{ route('pnl.index') }}" class="btn-excel btn-excel-secondary">
-        <i class="fas fa-arrow-left me-1"></i> Back
-    </a>
-    <a href="{{ route('pnl.export-country', $country) }}" class="btn-excel btn-excel-success">
-        <i class="fas fa-download me-1"></i> Export All (CSV)
-    </a>
-    <a href="{{ route('pnl.export-country-approved', $country) }}" class="btn-excel btn-excel-warning">
-        <i class="fas fa-check-circle me-1"></i> Export Updated Only
-    </a>
-</div>
+                <div class="d-flex gap-2">
+                    <a href="{{ route('pnl.index') }}" class="btn-excel btn-excel-secondary">
+                        <i class="fas fa-arrow-left me-1"></i> Back
+                    </a>
+                    <a href="{{ route('pnl.export-country', $country) }}" class="btn-excel btn-excel-success">
+                        <i class="fas fa-download me-1"></i> Export All (CSV)
+                    </a>
+                    <a href="{{ route('pnl.export-country-approved', $country) }}" class="btn-excel btn-excel-warning">
+                        <i class="fas fa-check-circle me-1"></i> Export Updated Only
+                    </a>
+                </div>
             </div>
         </div>
 
@@ -459,16 +465,17 @@
             color: #dc2626;
             font-weight: 600;
         }
-        .btn-excel-warning {
-    background-color: #f59e0b;
-    color: white;
-}
 
-.btn-excel-warning:hover {
-    background-color: #d97706;
-    transform: translateY(-1px);
-    color: white;
-}
+        .btn-excel-warning {
+            background-color: #f59e0b;
+            color: white;
+        }
+
+        .btn-excel-warning:hover {
+            background-color: #d97706;
+            transform: translateY(-1px);
+            color: white;
+        }
     </style>
 
     @push('scripts')
