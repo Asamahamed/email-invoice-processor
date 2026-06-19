@@ -97,23 +97,23 @@
                 </div>
 
                 <!-- Quick Action Buttons -->
-              <!-- Quick Action Buttons -->
-<div class="row mb-4">
-    <div class="col-12">
-        <div class="d-flex gap-2 flex-wrap">
-            <a href="{{ route('credit') }}" class="btn btn-accent">
-                <i class="fas fa-credit-card me-1"></i> Credit Invoices
-            </a>
-            <a href="{{ route('non-credit') }}" class="btn btn-outline-primary">
-                <i class="fas fa-file-alt me-1"></i> Non-Credit Invoices
-            </a>
-            <!-- Reports Button -->
-            <a href="{{ route('reports.index') }}" class="btn btn-info">
-                <i class="fas fa-chart-bar me-1"></i> Reports
-            </a>
-        </div>
-    </div>
-</div>
+                <!-- Quick Action Buttons -->
+                <div class="row mb-4">
+                    <div class="col-12">
+                        <div class="d-flex gap-2 flex-wrap">
+                            <a href="{{ route('credit') }}" class="btn btn-accent">
+                                <i class="fas fa-credit-card me-1"></i> Credit Invoices
+                            </a>
+                            <a href="{{ route('non-credit') }}" class="btn btn-outline-primary">
+                                <i class="fas fa-file-alt me-1"></i> Non-Credit Invoices
+                            </a>
+                            <!-- Reports Button -->
+                            <a href="{{ route('reports.index') }}" class="btn btn-info">
+                                <i class="fas fa-chart-bar me-1"></i> Reports
+                            </a>
+                        </div>
+                    </div>
+                </div>
 
                 <!-- Filter Section -->
                 <div class="filter-section mb-4">
@@ -181,22 +181,25 @@
                 <!-- Emails Table -->
                 <div class="table-responsive">
                     <table class="table table-hover">
-                        <thead>
-                            <tr>
-                                <th>#</th>
-                                <th>Received</th>
-                                <th>From</th>
-                                <th>Subject</th>
-                                <th>Travel Dates</th>
-                                <th>Handler</th>
-                                <th>Agent</th>
-                                <th>Invoice No</th>
-                                <th>Tour Ref</th>
-                                <th>Amount</th>
-                                <th>Type</th>
-                                <th>Actions</th>
-                            </tr>
-                        </thead>
+                      <thead>
+    <tr>
+        <th>#</th>
+        <th>Received</th>
+        <th>From</th>
+        <th>Subject</th>
+        <th>Travel Start</th>
+        <th>Travel End</th>
+        <th>Handler</th>
+        <th>Agent</th>
+        <th>Invoice No</th>
+        <th>Tour Ref</th>
+        <th>Agent ID</th>
+        <th>Sales Person</th>
+        <th>Amount</th>
+        <th>Type</th>
+        <th>Actions</th>
+    </tr>
+</thead>
                         <tbody>
                             @forelse($emails as $index => $email)
                                 <tr class="email-row" data-email-id="{{ $email->id }}" style="cursor: pointer;">
@@ -215,17 +218,20 @@
                                             <span class="badge-credit mt-1 d-inline-block">Confirmation</span>
                                         @endif
                                     </td>
-                                    <td>
-                                        @if ($email->travel_start_date)
-                                            {{ \Carbon\Carbon::parse($email->travel_start_date)->format('d/m/Y') }}
-                                            @if ($email->travel_end_date)
-                                                <br><small>to
-                                                    {{ \Carbon\Carbon::parse($email->travel_end_date)->format('d/m/Y') }}</small>
-                                            @endif
-                                        @else
-                                            <span class="text-muted">-</span>
-                                        @endif
-                                    </td>
+                                 <td>
+    @if ($email->travel_start_date)
+        {{ \Carbon\Carbon::parse($email->travel_start_date)->format('d/m/Y') }}
+    @else
+        <span class="text-muted">-</span>
+    @endif
+</td>
+<td>
+    @if ($email->travel_end_date)
+        {{ \Carbon\Carbon::parse($email->travel_end_date)->format('d/m/Y') }}
+    @else
+        <span class="text-muted">-</span>
+    @endif
+</td>
                                     <td>{{ $email->file_handler ?: '-' }}</td>
                                     <td class="fw-semibold">{{ $email->agent_name ?: '-' }}</td>
                                     <td>
@@ -242,6 +248,8 @@
                                             <span class="text-muted">-</span>
                                         @endif
                                     </td>
+                                    <td>{{ $email->agent_id ?: '-' }}</td>
+                                    <td>{{ $email->sales_person ?: '-' }}</td>
                                     <td class="fw-semibold">
                                         @if ($email->total_amount)
                                             {{ $email->currency ?? 'USD' }} {{ number_format($email->total_amount, 2) }}
@@ -283,7 +291,7 @@
                                 </tr>
                             @empty
                                 <tr>
-                                    <td colspan="12" class="text-center py-5">
+                                    <td colspan="15" class="text-center py-5">
                                         <i class="fas fa-inbox fa-3x text-secondary mb-3 d-block"></i>
                                         <p class="text-muted mb-0">No emails found</p>
                                         <button type="submit" form="fetchForm" class="btn btn-accent mt-3">
@@ -549,7 +557,7 @@
                                         if ($button) {
                                             $button.html(
                                                 '<i class="fas fa-spinner fa-spin"></i> Creating Revision...'
-                                                );
+                                            );
                                         }
 
                                         $.ajax({
@@ -591,7 +599,7 @@
                                         if ($button) {
                                             $button.html(
                                                 '<i class="fas fa-spinner fa-spin"></i> Generating...'
-                                                );
+                                            );
                                         }
 
                                         $.ajax({
@@ -609,7 +617,7 @@
                                                         response.invoice_id, '_blank');
                                                     toastr.success(
                                                         '✅ Invoice generated with auto GST!'
-                                                        );
+                                                    );
                                                     setTimeout(() => location.reload(),
                                                         1500);
                                                 } else {
@@ -683,7 +691,7 @@
 
                                         $button.prop('disabled', true).html(
                                             '<i class="fas fa-spinner fa-spin"></i> Creating Revision...'
-                                            );
+                                        );
 
                                         $.ajax({
                                             url: '{{ route('regenerate.invoice') }}',
@@ -700,7 +708,7 @@
                                                         response.invoice_id, '_blank');
                                                     toastr.success(response.message ||
                                                         '✅ Revision created successfully!'
-                                                        );
+                                                    );
                                                     setTimeout(() => location.reload(),
                                                         2000);
                                                 } else {

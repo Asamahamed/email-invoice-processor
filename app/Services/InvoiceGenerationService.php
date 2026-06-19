@@ -447,7 +447,7 @@ protected function getInvoiceNumberWithRevision($baseNumber, $revisionNumber = n
                 
                 <div class="header-address">
                     #2207 - #2208, One Galle Face Tower, 1A Center Road, Colombo 02, Sri Lanka<br>
-                    Tel: +94-11-7423700 Fax: +94-11-7423707 email: accounts@appleholidaysds.com
+                    Tel: +94-11-2353400 Fax: +94-11-7423707 email: accounts@aahaas.com
                 </div>
                 
                 ' . $revisionNote . '
@@ -479,7 +479,7 @@ protected function getInvoiceNumberWithRevision($baseNumber, $revisionNumber = n
     </tr>
 </table>
                 <table class="items-table">
-                    <thead><tr><th>Particulars</th><th>UNIT FARE</th><th>DISC %</th><th>QTY.</th><th class="amount">AMOUNT</th></tr></thead>
+                    <thead><tr><th>Description</th><th>UNIT FARE</th><th>DISCount %</th><th>Quantity</th><th class="amount">AMOUNT</th></tr></thead>
                     <tbody>
                         ' . ($totalGuests > 1 ? '
                         <tr><td>Cost Per Person</td><td>$' . number_format($perPersonAmount, 2) . '</td><td>0</td><td>' . $totalGuests . '</td><td class="amount">$' . number_format($totalAmount, 2) . '</td></tr>
@@ -669,7 +669,7 @@ protected function getInvoiceNumberWithRevision($baseNumber, $revisionNumber = n
                     </div>
                     <div class="company-details">
                         Tel : +91 0452 405 8375 / 4054704 | Email : Chennai@Sharmilatravels.com<br>
-                        Services Tax ( Registration NO .) : ADVF4429D | GSTIN : 33ADVFS4429D1ZV
+                        Services Tax : ADVF4429D | GSTIN : 33ADVFS4429D1ZV
                     </div>
                 </div>
                 
@@ -681,7 +681,7 @@ protected function getInvoiceNumberWithRevision($baseNumber, $revisionNumber = n
                 </div>
                 
                 <div class="invoice-title">
-                    <span>INVOICE (Original)</span>
+                    <span>INVOICE</span>
                 </div>
                 
                 <!-- NO separate Address: section here -->
@@ -702,7 +702,7 @@ protected function getInvoiceNumberWithRevision($baseNumber, $revisionNumber = n
 </table>
                 
                 <table class="items-table">
-                    <thead><tr><th>Particulars</th><th>Unit Fare</th><th>Discount</th><th>Qty</th><th class="amount">Amount</th></tr></thead>
+                    <thead><tr><th>Description</th><th>Unit Fare</th><th>Discount</th><th>Quantity</th><th class="amount">Amount</th></tr></thead>
                     <tbody>
                         <tr><td>Cost Per Person</td><td>INR ' . number_format($netPerPersonINR, 2) . '</td><td>0</td><td>' . $totalGuests . '</td><td class="amount">INR ' . number_format($totalTourCost, 2) . '</td></tr>
                         <tr><td>Handling Fee</td><td>INR ' . number_format($handlingFeePerPersonINR, 2) . '</td><td>0</td><td>' . $totalGuests . '</td><td class="amount">INR ' . number_format($totalHandlingFee, 2) . '</td></tr>
@@ -712,8 +712,8 @@ protected function getInvoiceNumberWithRevision($baseNumber, $revisionNumber = n
                 <div class="total-section">
                     <table class="total-table">
                         <tr><td class="label-cell">Sub Total :</td><td class="amount-cell">INR ' . number_format($subTotal, 2) . '</td></tr>
-                        <tr><td class="label-cell">CGST of 9.00% :</td><td class="amount-cell">INR ' . number_format($cgstAmount, 2) . '</td></tr>
-                        <tr><td class="label-cell">SGST of 9.00% :</td><td class="amount-cell">INR ' . number_format($sgstAmount, 2) . '</td></tr>
+                        <tr><td class="label-cell">CGST 9.00% :</td><td class="amount-cell">INR ' . number_format($cgstAmount, 2) . '</td></tr>
+                        <tr><td class="label-cell">SGST 9.00% :</td><td class="amount-cell">INR ' . number_format($sgstAmount, 2) . '</td></tr>
                         <tr style="background-color: #f0f0f0; font-weight: bold;"><td class="label-cell">Total :</td><td class="amount-cell">INR ' . number_format($grandTotal, 2) . '</td></tr>
                         <tr><td class="label-cell">Amount Received :</td><td class="amount-cell">INR ' . number_format($amountReceived, 2) . '</td></tr>
                         <tr style="font-weight: bold;"><td class="label-cell">Balance :</td><td class="amount-cell">INR ' . number_format($balanceDue, 2) . '</td></tr>

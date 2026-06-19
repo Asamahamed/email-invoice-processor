@@ -1330,4 +1330,32 @@ public function exportSelected(Request $request)
         ], 500);
     }
 }
+
+public function apiHeaders()
+{
+    $records = PnlRecord::orderBy('created_at', 'desc')->get();
+
+    return response()->json([
+        'success' => true,
+        'count' => $records->count(),
+        'data' => $records
+    ]);
+}
+public function apiItems($id)
+{
+    $record = PnlRecord::with('items')->find($id);
+
+    if (!$record) {
+        return response()->json([
+            'success' => false,
+            'message' => 'PNL record not found'
+        ], 404);
+    }
+
+    return response()->json([
+        'success' => true,
+        'header' => $record,
+        'items' => $record->items
+    ]);
+}
 }
