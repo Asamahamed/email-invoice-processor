@@ -8,6 +8,9 @@ use App\Services\EmailFetchService;
 use App\Services\InvoiceGenerationService;
 use Illuminate\Http\Request;
 use Illuminate\Validation\ValidationException;
+use Illuminate\Support\Facades\Log;
+use App\Mail\InvoiceMail;
+use Illuminate\Support\Facades\Mail;
 
 class InvoiceController extends Controller
 {
@@ -132,20 +135,74 @@ public function nonCredit(Request $request)
         }
     }
     
-    public function viewInvoice($id)
-    {
-        $invoice = GeneratedInvoice::findOrFail($id);
-        $path = storage_path("app/public/{$invoice->file_path}");
-        
-        if (file_exists($path)) {
-            return response()->file($path, [
+public function viewInvoice($id)
+{
+    $invoice = GeneratedInvoice::findOrFail($id);
+    
+    // ✅ Check if file_path exists
+    if (!$invoice->file_path) {
+        return redirect()->back()->with('error', 'Invoice file path not found for: ' . $invoice->invoice_number);
+    }
+    
+    $path = storage_path("app/public/{$invoice->file_path}");
+    
+    // ✅ Log the path for debugging
+    Log::info("Looking for invoice file: {$path}");
+    
+    if (file_exists($path)) {
+        return response()->file($path, [
+            'Content-Type' => 'application/pdf',
+            'Content-Disposition' => 'inline; filename="' . $invoice->invoice_number . '.pdf"'
+        ]);
+    }
+    
+    // ✅ If file doesn't exist, try to regenerate it
+    Log::warning("Invoice file not found: {$path}, attempting to regenerate");
+    
+    // Try to find the email and regenerate
+    $email = \App\Models\IncomingEmail::find($invoice->email_id);
+    if ($email) {
+        try {
+            // Regenerate the invoice PDF
+            $invoiceService = new InvoiceGenerationService();
+            $classification = (new AgentClassificationService())->classify(
+                $email->body ?? '', 
+                $email->from_email ?? '', 
+                $email->subject ?? '', 
+                $email->agent_name
+            );
+            
+            // Generate PDF
+            $html = $invoiceService->generateAppleHolidaysInvoiceHTML($invoice, $email);
+            $pdf = Pdf::loadHTML($html);
+            $filename = "invoices/{$invoice->invoice_number}.pdf";
+            
+            // Create directory if needed
+            $directory = storage_path('app/public/invoices');
+            if (!File::exists($directory)) {
+                File::makeDirectory($directory, 0755, true);
+            }
+            
+            $pdf->save(storage_path("app/public/{$filename}"));
+            $invoice->file_path = $filename;
+            $invoice->save();
+            
+            Log::info("✅ Regenerated invoice: {$filename}");
+            
+            // Now serve the file
+            return response()->file(storage_path("app/public/{$filename}"), [
                 'Content-Type' => 'application/pdf',
                 'Content-Disposition' => 'inline; filename="' . $invoice->invoice_number . '.pdf"'
             ]);
+            
+        } catch (\Exception $e) {
+            Log::error("Failed to regenerate invoice: " . $e->getMessage());
+            return redirect()->back()->with('error', 'Invoice file not found and could not be regenerated.');
         }
-        
-        return redirect()->back()->with('error', 'Invoice file not found');
     }
+    
+    return redirect()->back()->with('error', 'Invoice file not found for: ' . $invoice->invoice_number);
+}
     
     public function downloadInvoice($id)
     {
@@ -159,71 +216,95 @@ public function nonCredit(Request $request)
         return redirect()->back()->with('error', 'Invoice file not found');
     }
     
-public function generateAndViewInvoice(Request $request)
-{
-    $request->validate([
-        'email_id' => 'required|exists:incoming_emails,id',
-    ]);
-
-    $email = IncomingEmail::findOrFail($request->email_id);
-    
-    try {
-        // Check if any invoice exists with this invoice_number or tour_ref
-        $existingInvoice = GeneratedInvoice::where(function($query) use ($email) {
-            $query->where('invoice_number', 'LIKE', $email->invoice_number . '%')
-                  ->orWhere('tour_ref', $email->tour_ref)
-                  ->orWhere('original_invoice_number', $email->invoice_number);
-        })->orderBy('revision_number', 'desc')->first();
-        
-        $invoiceService = new InvoiceGenerationService();
-        
-        if ($existingInvoice) {
-            // Get next revision number
-            $nextRevisionNumber = $existingInvoice->revision_number + 1;
-            $baseNumber = $email->invoice_number;
-            $newInvoiceNumber = $baseNumber . 'R' . $nextRevisionNumber;
-            
-            // Get classification
-            $agentClassifier = new \App\Services\AgentClassificationService();
-            $classification = $agentClassifier->classify(
-                $email->body ?? '', 
-                $email->from_email ?? '', 
-                $email->subject ?? '', 
-                $email->agent_name
-            );
-            
-            // Create NEW revision invoice
-            $invoice = $invoiceService->generateRevisionFromEmail(
-                $email, 
-                $classification, 
-                $newInvoiceNumber, 
-                $nextRevisionNumber,
-                $baseNumber
-            );
-            $message = '✅ Revision R' . $nextRevisionNumber . ' created!';
-        } else {
-            // Create new invoice
-            $invoice = $invoiceService->generateFromEmail($email);
-            $message = '✅ Invoice generated successfully!';
-        }
-        
-        $email->update(['processing_status' => 'invoice_generated']);
-        
-        return response()->json([
-            'success' => true,
-            'invoice_id' => $invoice->id,
-            'invoice_number' => $invoice->invoice_number,
-            'revision_number' => $invoice->revision_number,
-            'message' => $message
+ public function generateAndViewInvoice(Request $request)
+    {
+        $request->validate([
+            'email_id' => 'required|exists:incoming_emails,id',
         ]);
-    } catch (\Exception $e) {
-        \Log::error('Invoice generation failed: ' . $e->getMessage());
-        return response()->json([
-            'success' => false,
-            'message' => '❌ Failed to generate invoice: ' . $e->getMessage()
-        ], 500);
+
+        $email = IncomingEmail::findOrFail($request->email_id);
+        
+        try {
+            // Check if any invoice exists with this invoice_number or tour_ref
+            $existingInvoice = GeneratedInvoice::where(function($query) use ($email) {
+                $query->where('invoice_number', 'LIKE', $email->invoice_number . '%')
+                      ->orWhere('tour_ref', $email->tour_ref)
+                      ->orWhere('original_invoice_number', $email->invoice_number);
+            })->orderBy('revision_number', 'desc')->first();
+            
+            $invoiceService = new InvoiceGenerationService();
+            
+            if ($existingInvoice) {
+                // Get next revision number
+                $nextRevisionNumber = $existingInvoice->revision_number + 1;
+                $baseNumber = $email->invoice_number;
+                $newInvoiceNumber = $baseNumber . 'R' . $nextRevisionNumber;
+                
+                // Get classification
+                $agentClassifier = new \App\Services\AgentClassificationService();
+                $classification = $agentClassifier->classify(
+                    $email->body ?? '', 
+                    $email->from_email ?? '', 
+                    $email->subject ?? '', 
+                    $email->agent_name
+                );
+                
+                // Create NEW revision invoice
+                $invoice = $invoiceService->generateRevisionFromEmail(
+                    $email, 
+                    $classification, 
+                    $newInvoiceNumber, 
+                    $nextRevisionNumber,
+                    $baseNumber
+                );
+                $message = '✅ Revision R' . $nextRevisionNumber . ' created!';
+            } else {
+                // Create new invoice
+                $invoice = $invoiceService->generateFromEmail($email);
+                $message = '✅ Invoice generated successfully!';
+            }
+            
+            // ✅✅✅ SEND EMAIL - PLACE THIS HERE ✅✅✅
+            if ($invoice) {
+                try {
+                    // Determine email type
+                    $emailType = 'credit';
+                    if ($invoice->is_revision) {
+                        $emailType = 'revision';
+                    } elseif ($invoice->invoice_type == 'non_credit') {
+                        $emailType = 'non_credit';
+                    }
+                    
+                    // Send email with attachment
+                    Mail::to('kevinraj@aahaas.com')
+                        ->cc('raja.lakshmi@aahaas.com')
+                        ->send(new InvoiceMail($invoice, $emailType));
+                    
+                    Log::info("📧 Invoice email sent for: " . $invoice->invoice_number);
+                } catch (\Exception $e) {
+                    Log::error('❌ Email send failed: ' . $e->getMessage());
+                }
+            }
+            // ✅✅✅ END OF EMAIL SEND ✅✅✅
+            
+            $email->update(['processing_status' => 'invoice_generated']);
+            
+            return response()->json([
+                'success' => true,
+                'invoice_id' => $invoice->id,
+                'invoice_number' => $invoice->invoice_number,
+                'revision_number' => $invoice->revision_number,
+                'message' => $message
+            ]);
+            
+        } catch (\Exception $e) {
+            \Log::error('Invoice generation failed: ' . $e->getMessage());
+            return response()->json([
+                'success' => false,
+                'message' => '❌ Failed to generate invoice: ' . $e->getMessage()
+            ], 500);
+        }
     }
-}
 
    public function getInvoiceDetails(Request $request)
 {

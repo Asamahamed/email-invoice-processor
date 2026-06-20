@@ -10,149 +10,214 @@ use Illuminate\Support\Facades\Log;
 class ExchangeRateService
 {
     /**
-     * Get USD to INR exchange rate from XE.com or API
-     * Returns rate with +1 markup as per your requirement
+     * Get USD to INR exchange rate
      */
     public function getUsdToInrRate()
     {
-        // Check cache first (cache for 1 hour)
         $cachedRate = Cache::get('usd_to_inr_rate');
         if ($cachedRate) {
             return $cachedRate;
         }
         
-        $rate = $this->fetchFromXE();
+        $rate = $this->fetchRate('USD', 'INR');
         
         if (!$rate) {
-            // Fallback rates if API fails
-            $rate = $this->getFallbackRate();
+            $rate = $this->getFallbackRate('USD', 'INR');
         }
         
         // Add +1 markup
         $finalRate = $rate + 1;
         
-        // Cache for 1 hour
         Cache::put('usd_to_inr_rate', $finalRate, 3600);
         
         return $finalRate;
     }
-    
+
     /**
-     * Fetch rate from XE.com (via scraping or free API)
+     * ✅ Get SGD to INR exchange rate
      */
-    protected function fetchFromXE()
+    public function getSgdToInrRate()
     {
-        try {
-            // Try free API (fixer.io or exchangerate-api.com)
-            // Option 1: exchangerate-api.com (free, no API key required for basic)
-            $response = Http::timeout(10)->get('https://api.exchangerate-api.com/v4/latest/USD');
-            
-            if ($response->successful()) {
-                $data = $response->json();
-                $rate = $data['rates']['INR'] ?? null;
-                if ($rate) {
-                    Log::info("Exchange rate fetched from exchangerate-api: USD 1 = INR {$rate}");
-                    return $rate;
-                }
-            }
-            
-            // Option 2: Alternative free API
-            $response2 = Http::timeout(10)->get('https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@latest/v1/currencies/usd.json');
-            
-            if ($response2->successful()) {
-                $data = $response2->json();
-                $rate = $data['usd']['inr'] ?? null;
-                if ($rate) {
-                    Log::info("Exchange rate fetched from jsdelivr: USD 1 = INR {$rate}");
-                    return $rate;
-                }
-            }
-            
-            // Option 3: Scrape XE.com (last resort)
-            $response3 = Http::timeout(15)->get('https://www.xe.com/currencyconverter/convert/?Amount=1&From=USD&To=INR');
-            
-            if ($response3->successful()) {
-                $html = $response3->body();
-                // Look for conversion result pattern
-                if (preg_match('/(\d+\.?\d*)\s*INR/', $html, $matches)) {
-                    $rate = floatval($matches[1]);
-                    Log::info("Exchange rate scraped from XE.com: USD 1 = INR {$rate}");
-                    return $rate;
-                }
-            }
-            
-        } catch (\Exception $e) {
-            Log::error("Failed to fetch exchange rate: " . $e->getMessage());
+        $cachedRate = Cache::get('sgd_to_inr_rate');
+        if ($cachedRate) {
+            return $cachedRate;
         }
         
-        return null;
-    }
-    
-    /**
-     * Get fallback rate if API fails
-     */
-    protected function getFallbackRate()
-    {
-        // Get current date to check if weekend (rates don't change much)
-        $currentRate = 83.50; // Base rate
+        $rate = $this->fetchRate('SGD', 'INR');
         
-        Log::warning("Using fallback exchange rate: USD 1 = INR {$currentRate}");
-        return $currentRate;
-    }
-    
-    /**
-     * Get multiple currencies at once
-     */
-    public function getRates($baseCurrency = 'USD', $targetCurrencies = ['INR', 'SGD', 'EUR'])
-    {
-        $rates = [];
-        
-        foreach ($targetCurrencies as $currency) {
-            if ($currency === $baseCurrency) {
-                $rates[$currency] = 1;
-                continue;
-            }
-            
-            $rate = $this->getRate($baseCurrency, $currency);
-            if ($rate) {
-                $rates[$currency] = $rate;
-            }
+        if (!$rate) {
+            $rate = $this->getFallbackRate('SGD', 'INR');
         }
         
-        return $rates;
+        // Add +1 markup
+        $finalRate = $rate + 1;
+        
+        Cache::put('sgd_to_inr_rate', $finalRate, 3600);
+        
+        return $finalRate;
     }
-    
+
     /**
-     * Get rate between two currencies
+     * ✅ Get MYR (Malaysian Ringgit) to INR exchange rate
+     */
+    public function getMyrToInrRate()
+    {
+        $cachedRate = Cache::get('myr_to_inr_rate');
+        if ($cachedRate) {
+            return $cachedRate;
+        }
+        
+        $rate = $this->fetchRate('MYR', 'INR');
+        
+        if (!$rate) {
+            $rate = $this->getFallbackRate('MYR', 'INR');
+        }
+        
+        // Add +1 markup
+        $finalRate = $rate + 1;
+        
+        Cache::put('myr_to_inr_rate', $finalRate, 3600);
+        
+        return $finalRate;
+    }
+
+    /**
+     * ✅ Get exchange rate between any two currencies
      */
     public function getRate($from, $to)
     {
+        $cacheKey = strtolower($from) . '_to_' . strtolower($to) . '_rate';
+        $cachedRate = Cache::get($cacheKey);
+        if ($cachedRate) {
+            return $cachedRate;
+        }
+        
+        $rate = $this->fetchRate($from, $to);
+        
+        if (!$rate) {
+            $rate = $this->getFallbackRate($from, $to);
+        }
+        
+        Cache::put($cacheKey, $rate, 3600);
+        
+        return $rate;
+    }
+
+    /**
+     * Fetch rate from API
+     */
+    protected function fetchRate($from, $to)
+    {
         try {
+            // Using exchangerate-api.com (free, no API key required)
             $response = Http::timeout(10)->get("https://api.exchangerate-api.com/v4/latest/{$from}");
             
             if ($response->successful()) {
                 $data = $response->json();
-                return $data['rates'][$to] ?? null;
+                $rate = $data['rates'][$to] ?? null;
+                if ($rate) {
+                    Log::info("Exchange rate fetched: 1 {$from} = {$rate} {$to}");
+                    return $rate;
+                }
             }
+            
+            // Fallback to another free API
+            $response2 = Http::timeout(10)->get("https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@latest/v1/currencies/" . strtolower($from) . ".json");
+            
+            if ($response2->successful()) {
+                $data = $response2->json();
+                $rate = $data[strtolower($from)][strtolower($to)] ?? null;
+                if ($rate) {
+                    Log::info("Exchange rate fetched (jsdelivr): 1 {$from} = {$rate} {$to}");
+                    return $rate;
+                }
+            }
+            
         } catch (\Exception $e) {
-            Log::error("Failed to fetch {$from} to {$to} rate: " . $e->getMessage());
+            Log::error("Failed to fetch exchange rate for {$from} to {$to}: " . $e->getMessage());
         }
         
         return null;
     }
-    
+
     /**
-     * Manually update cache (for cron job)
+     * Fallback rates
      */
-    public function refreshCache()
+    protected function getFallbackRate($from, $to)
     {
-        $rate = $this->fetchFromXE();
-        if ($rate) {
-            $finalRate = $rate + 1;
-            Cache::put('usd_to_inr_rate', $finalRate, 3600);
-            Log::info("Exchange rate cache refreshed: USD 1 = INR {$finalRate}");
-            return $finalRate;
+        // Common exchange rates (approximate)
+        $rates = [
+            'USD_INR' => 83.50,
+            'SGD_INR' => 62.00,
+            'MYR_INR' => 17.50,
+            'EUR_INR' => 90.00,
+            'GBP_INR' => 105.00,
+        ];
+        
+        $key = $from . '_' . $to;
+        
+        // Check if we have a fallback rate
+        if (isset($rates[$key])) {
+            Log::warning("Using fallback exchange rate: 1 {$from} = {$rates[$key]} {$to}");
+            return $rates[$key];
         }
-        return null;
+        
+        // Try reverse rate
+        $reverseKey = $to . '_' . $from;
+        if (isset($rates[$reverseKey])) {
+            $rate = 1 / $rates[$reverseKey];
+            Log::warning("Using fallback exchange rate: 1 {$from} = {$rate} {$to}");
+            return $rate;
+        }
+        
+        // Default fallback for SGD to INR
+        if ($from === 'SGD' && $to === 'INR') {
+            return 62.00;
+        }
+        
+        // Default fallback for MYR to INR
+        if ($from === 'MYR' && $to === 'INR') {
+            return 17.50;
+        }
+        
+        return 83.50; // Default USD to INR
+    }
+
+    /**
+     * Convert amount with markup
+     */
+    public function convertWithMarkup($amount, $fromCurrency, $toCurrency = 'INR', $markup = 1)
+    {
+        $rate = $this->getRate($fromCurrency, $toCurrency);
+        $convertedAmount = $amount * $rate;
+        
+        // Add markup
+        $finalAmount = $convertedAmount + ($convertedAmount * ($markup / 100));
+        
+        Log::info("Converted: {$amount} {$fromCurrency} = {$finalAmount} {$toCurrency} (Rate: {$rate}, Markup: {$markup}%)");
+        
+        return $finalAmount;
+    }
+
+    /**
+     * Refresh all cached rates
+     */
+    public function refreshAllRates()
+    {
+        $this->refreshRate('USD', 'INR');
+        $this->refreshRate('SGD', 'INR');
+        $this->refreshRate('MYR', 'INR');
+        
+        Log::info("All exchange rates refreshed");
+    }
+
+    protected function refreshRate($from, $to)
+    {
+        $rate = $this->fetchRate($from, $to);
+        if ($rate) {
+            $cacheKey = strtolower($from) . '_to_' . strtolower($to) . '_rate';
+            Cache::put($cacheKey, $rate, 3600);
+            Log::info("Refreshed {$from} to {$to} rate: {$rate}");
+        }
     }
 }

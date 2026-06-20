@@ -10,20 +10,32 @@ use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\DB;
+use App\Mail\InvoiceMail;
+use Illuminate\Support\Facades\Mail;
 
 class MicrosoftGraphService
 {
     protected $accessToken;
     protected $agentClassifier;
     protected $batchSize = 100;
-    protected $maxEmailsToProcess = 1000;
+    protected $maxEmailsToProcess = 5000; // ✅ Increased limit
     
     public function __construct()
     {
         $this->authenticate();
         $this->agentClassifier = new AgentClassificationService();
     }
-    
+    // Add these public methods at the end of the class
+
+public function getAccessToken()
+{
+    return $this->accessToken;
+}
+
+public function isAuthenticated()
+{
+    return !empty($this->accessToken);
+}
     protected function authenticate()
     {
         try {
@@ -50,124 +62,144 @@ class MicrosoftGraphService
             return false;
         }
     }
-    
-    public function fetchAllEmails()
-    {
-        try {
-            set_time_limit(600);
+public function fetchAllEmails()
+{
+    try {
+        set_time_limit(600);
+        
+        $allMessages = [];
+        $nextLink = null;
+        $pageCount = 0;
+        $totalFetched = 0;
+        
+        $baseUrl = 'https://graph.microsoft.com/v1.0/users/' . env('GRAPH_INVOICE_USER') . '/mailfolders/inbox/messages';
+        
+        Log::info("🚀 Starting to fetch emails from INBOX...");
+        
+        // ✅ Get existing message IDs
+        $existingIds = IncomingEmail::pluck('message_id')->toArray();
+        $existingIdSet = array_flip($existingIds);
+        Log::info("📊 Found " . count($existingIds) . " existing emails in database");
+        
+        do {
+            $url = $nextLink ?? $baseUrl . '?' . http_build_query([
+                '$top' => $this->batchSize,
+                '$orderby' => 'receivedDateTime desc',
+                '$select' => 'id,subject,bodyPreview,from,receivedDateTime,isRead,hasAttachments',
+            ]);
             
-            $allMessages = [];
-            $nextLink = null;
-            $pageCount = 0;
-            $totalFetched = 0;
+            Log::info("📡 Fetching page " . ($pageCount + 1));
             
-            $baseUrl = 'https://graph.microsoft.com/v1.0/users/' . env('GRAPH_INVOICE_USER') . '/mailfolders/inbox/messages';
+            $response = Http::withToken($this->accessToken)
+                ->timeout(180)
+                ->get($url);
             
-            Log::info("🚀 Starting to fetch emails from INBOX...");
-            
-            // Get existing message IDs to avoid duplicates
-            $existingIds = IncomingEmail::pluck('message_id')->toArray();
-            Log::info("📊 Found " . count($existingIds) . " existing emails");
-            
-            do {
-                $url = $nextLink ?? $baseUrl . '?' . http_build_query([
-                    '$top' => $this->batchSize,
-                    '$orderby' => 'receivedDateTime desc',
-                    '$select' => 'id,subject,bodyPreview,from,receivedDateTime,isRead,hasAttachments',
-                ]);
-                
-                Log::info("📡 Fetching page " . ($pageCount + 1));
-                
-                $response = Http::withToken($this->accessToken)
-                    ->timeout(180)
-                    ->get($url);
-                
-                if (!$response->ok()) {
-                    Log::error('Failed to fetch emails page: ' . $response->body());
-                    break;
-                }
-                
-                $data = $response->json();
-                $messages = $data['value'] ?? [];
-                
-                if (empty($messages)) {
-                    Log::info("No more messages to fetch");
-                    break;
-                }
-                
-                // Filter out existing emails
-                $newMessages = array_filter($messages, function($msg) use ($existingIds) {
-                    return !in_array($msg['id'], $existingIds);
-                });
-                
-                $allMessages = array_merge($allMessages, $newMessages);
-                $nextLink = $data['@odata.nextLink'] ?? null;
-                $pageCount++;
-                $totalFetched += count($newMessages);
-                
-                Log::info("📥 Page {$pageCount}: " . count($newMessages) . " new emails (Total new: {$totalFetched})");
-                
-                if ($totalFetched >= $this->maxEmailsToProcess) {
-                    Log::info("⚠️ Reached safety limit of {$this->maxEmailsToProcess} new emails");
-                    break;
-                }
-                
-                if (!$nextLink) {
-                    Log::info("✅ Reached end of mailbox");
-                    break;
-                }
-                
-                usleep(200000);
-                
-            } while ($nextLink);
-            
-            Log::info("📥 TOTAL new emails to process: " . count($allMessages));
-            
-            $savedCount = 0;
-            $failedCount = 0;
-            $chunkSize = 20;
-            
-            foreach (array_chunk($allMessages, $chunkSize) as $chunk) {
-                foreach ($chunk as $message) {
-                    try {
-                        $saved = $this->processEmail($message);
-                        if ($saved) {
-                            $savedCount++;
-                        } else {
-                            $failedCount++;
-                        }
-                    } catch (\Exception $e) {
-                        $failedCount++;
-                        Log::error("❌ Failed to process email: " . ($message['subject'] ?? 'Unknown') . " - " . $e->getMessage());
-                    }
-                }
-                usleep(100000);
+            if (!$response->ok()) {
+                Log::error('Failed to fetch emails page: ' . $response->body());
+                break;
             }
             
-            Log::info("📊 Summary: {$savedCount} saved, {$failedCount} failed");
-            return $savedCount;
+            $data = $response->json();
+            $messages = $data['value'] ?? [];
             
-        } catch (\Exception $e) {
-            Log::error('Error fetching emails: ' . $e->getMessage());
-            return 0;
+            if (empty($messages)) {
+                Log::info("No more messages to fetch");
+                break;
+            }
+            
+            Log::info("📥 Page " . ($pageCount + 1) . " has " . count($messages) . " messages");
+            
+            foreach ($messages as $message) {
+                $messageId = $message['id'];
+                
+                if (isset($existingIdSet[$messageId])) {
+                    Log::info("⏭️ Skipping existing email: " . ($message['subject'] ?? 'NO SUBJECT'));
+                    continue;
+                }
+                
+                $existingIdSet[$messageId] = true;
+                $allMessages[] = $message;
+                $totalFetched++;
+            }
+            
+            $nextLink = $data['@odata.nextLink'] ?? null;
+            $pageCount++;
+            
+            Log::info("📊 Page {$pageCount}: Found " . count($allMessages) . " new emails so far");
+            
+            if ($totalFetched >= $this->maxEmailsToProcess) {
+                Log::info("⚠️ Reached safety limit of {$this->maxEmailsToProcess} new emails");
+                break;
+            }
+            
+            if (!$nextLink) {
+                Log::info("✅ Reached end of mailbox");
+                break;
+            }
+            
+            usleep(200000);
+            
+        } while ($nextLink);
+        
+        Log::info("📥 TOTAL new emails to process: " . count($allMessages));
+        
+        $savedCount = 0;
+        $failedCount = 0;
+        $chunkSize = 20;
+        
+        foreach (array_chunk($allMessages, $chunkSize) as $chunkIndex => $chunk) {
+            Log::info("📦 Processing chunk " . ($chunkIndex + 1) . " of " . ceil(count($allMessages) / $chunkSize));
+            
+            foreach ($chunk as $index => $message) {
+                try {
+                    $subject = $message['subject'] ?? 'NO SUBJECT';
+                    Log::info("🔄 Processing email " . ($index + 1) . ": " . $subject);
+                    
+                    $saved = $this->processEmail($message);
+                    
+                    if ($saved === true) {
+                        $savedCount++;
+                        Log::info("✅ Successfully processed: " . $subject);
+                    } else {
+                        $failedCount++;
+                        Log::error("❌ Failed to process: " . $subject);
+                    }
+                } catch (\Exception $e) {
+                    $failedCount++;
+                    Log::error("❌ Exception processing email: " . ($message['subject'] ?? 'Unknown') . " - " . $e->getMessage() . "\n" . $e->getTraceAsString());
+                }
+            }
+            
+            usleep(100000);
         }
+        
+        Log::info("📊 Final Summary: {$savedCount} saved, {$failedCount} failed out of " . count($allMessages) . " total");
+        return $savedCount;
+        
+    } catch (\Exception $e) {
+        Log::error('Error fetching emails: ' . $e->getMessage() . "\n" . $e->getTraceAsString());
+        return 0;
     }
+}
     
     protected function processEmail($message)
     {
         $messageId = $message['id'];
         $subject = $message['subject'] ?? 'NO SUBJECT';
         
+        // ✅ Double-check if already exists (to avoid race conditions)
         if (IncomingEmail::where('message_id', $messageId)->exists()) {
-            Log::info("⏭️ Email already exists: " . $subject);
+            Log::info("⏭️ Email already exists (double-check): " . $subject);
             return true;
         }
         
+        // ✅ Try to fetch full message
         $fullMessage = $this->fetchFullMessage($messageId);
         
         if ($fullMessage) {
             return $this->saveEmail($fullMessage);
         } else {
+            Log::warning("⚠️ Could not fetch full message for: " . $subject . ", using preview");
             return $this->saveEmailWithPreview($message);
         }
     }
@@ -185,188 +217,239 @@ class MicrosoftGraphService
             if ($response->ok()) {
                 return $response->json();
             } else {
-                Log::warning("Failed to fetch full message {$messageId}: " . $response->status());
+                Log::warning("Failed to fetch full message {$messageId}: HTTP " . $response->status());
+                return null;
             }
         } catch (\Exception $e) {
             Log::error("Failed to fetch full message {$messageId}: " . $e->getMessage());
+            return null;
         }
-        
-        return null;
     }
     
-    protected function saveEmail($message)
-    {
-        try {
-            $subject = $message['subject'] ?? 'No Subject';
-            
-            $htmlBody = $message['body']['content'] ?? $message['bodyPreview'] ?? '';
-            $plainText = $this->htmlToPlainText($htmlBody);
-            
-            Log::info("Email body preview: " . substr($plainText, 0, 2000));
-            
-            $fromEmail = $message['from']['emailAddress']['address'] ?? '';
-            $fromName = $message['from']['emailAddress']['name'] ?? '';
-            $receivedAt = Carbon::parse($message['receivedDateTime']);
-            $readStatus = isset($message['isRead']) ? ($message['isRead'] ? 'read' : 'unread') : 'unread';
-            
-            $isTourConfirmation = stripos($plainText, 'TOUR CONFIRMATION') !== false;
-            
-            // Extract all reference numbers
-            $invoiceNumber = $this->extractInvoiceNumber($plainText);
-            $invoiceNumber = $this->cleanInvoiceNumber($invoiceNumber);
-            $tourRef = $this->extractTourReference($plainText);
-            $agentReferenceNo = $this->extractAgentReferenceNo($plainText);
-            
-            // Set defaults
-            if (!$tourRef) $tourRef = "NA";
-            if (!$agentReferenceNo) $agentReferenceNo = "NA";
-            if (!$invoiceNumber) $invoiceNumber = "NA";
-            
-            Log::info("Final Extracted - Invoice: {$invoiceNumber}, Tour Ref: {$tourRef}, Agent Ref: {$agentReferenceNo}");
-            
-            // Extract other fields
-            $fileHandler = $this->extractField($plainText, 'File Handler');
-            $agentName = $this->extractField($plainText, 'Agent');
-            
-            if ($agentName) {
-                $agentName = preg_replace('/\s*[-–].*$/', '', $agentName);
-                $agentName = trim($agentName);
-                Log::info("Cleaned Agent Name: {$agentName}");
-            }
-            
-            // Extract passenger names
-            $passengerNames = $this->extractPassengerNames($plainText);
-            $guestName = !empty($passengerNames) ? implode(', ', $passengerNames) : $this->extractField($plainText, 'Guests Name');
-            
-            // Extract travel dates - USE THE COMPREHENSIVE VERSION
-            $travelDates = $this->extractTravelDates($plainText);
-            $travelStart = $travelDates['start'];
-            $travelEnd = $travelDates['end'];
-            
-            Log::info("Travel Dates extracted - Start: {$travelStart}, End: {$travelEnd}");
-            
-            // Extract Total Amount
-            $totalAmount = null;
-            $currency = 'USD';
-            
-            if (preg_match('/Total Tour Cost[:\s]*([A-Z]{3})?\s*\$?\s*([0-9,]+\.?[0-9]*)/i', $plainText, $match)) {
-                $totalAmount = floatval(str_replace(',', '', $match[2]));
-                if (isset($match[1]) && !empty($match[1])) {
-                    $currency = strtoupper($match[1]);
-                }
-                Log::info("Found Total Tour Cost: {$currency} {$totalAmount}");
-            } elseif (preg_match('/\$\s*([0-9,]+\.?[0-9]*)/', $plainText, $match)) {
-                $totalAmount = floatval(str_replace(',', '', $match[1]));
-                Log::info("Found USD amount: {$totalAmount}");
+protected function saveEmail($message)
+{
+    try {
+        $subject = $message['subject'] ?? 'No Subject';
+        
+        $htmlBody = $message['body']['content'] ?? $message['bodyPreview'] ?? '';
+        $plainText = $this->htmlToPlainText($htmlBody);
+        
+        $fromEmail = $message['from']['emailAddress']['address'] ?? '';
+        $fromName = $message['from']['emailAddress']['name'] ?? '';
+        $receivedAt = Carbon::parse($message['receivedDateTime']);
+        $readStatus = isset($message['isRead']) ? ($message['isRead'] ? 'read' : 'unread') : 'unread';
+        
+        $isTourConfirmation = stripos($plainText, 'TOUR CONFIRMATION') !== false;
+        
+        // Extract invoice number, tour ref, etc.
+        $invoiceNumber = $this->extractInvoiceNumber($plainText);
+        $invoiceNumber = $this->cleanInvoiceNumber($invoiceNumber);
+        $tourRef = $this->extractTourReference($plainText);
+        $agentReferenceNo = $this->extractAgentReferenceNo($plainText);
+        
+        if (!$tourRef) $tourRef = "NA";
+        if (!$agentReferenceNo) $agentReferenceNo = "NA";
+        if (!$invoiceNumber) $invoiceNumber = "NA";
+        
+        // Extract other fields
+        $fileHandler = $this->extractField($plainText, 'File Handler');
+        $agentName = $this->extractField($plainText, 'Agent');
+        
+        if ($agentName) {
+            $agentName = preg_replace('/\s*[-–].*$/', '', $agentName);
+            $agentName = trim($agentName);
+        }
+        
+        $passengerNames = $this->extractPassengerNames($plainText);
+        $guestName = !empty($passengerNames) ? implode(', ', $passengerNames) : $this->extractField($plainText, 'Guests Name');
+        
+        $travelDates = $this->extractTravelDates($plainText);
+        $travelStart = $travelDates['start'];
+        $travelEnd = $travelDates['end'];
+        
+        // ✅ FIX: ONLY extract Total Tour Cost with better patterns
+        $totalAmount = null;
+        $currency = 'USD';
+        
+        Log::info("🔍 Extracting Total Tour Cost from email: " . $subject);
+        Log::info("📄 Plain text preview: " . substr($plainText, 0, 500));
+        
+        // ✅ PATTERN 1: Total Tour Cost with RM (Malaysia) - MUST CHECK FIRST
+        // Matches: "Total Tour Cost | RM 3,197.00" or "Total Tour Cost RM 3,197.00"
+        if (preg_match('/Total\s+Tour\s+Cost\s*[:\|]?\s*RM\s*([0-9,]+\.?[0-9]*)/i', $plainText, $match)) {
+            $totalAmount = floatval(str_replace(',', '', $match[1]));
+            $currency = 'MYR';
+            Log::info("✅ Extracted Total Tour Cost (MYR): RM {$totalAmount}");
+        }
+        // ✅ PATTERN 2: Total Tour Cost with MYR
+        elseif (preg_match('/Total\s+Tour\s+Cost\s*[:\|]?\s*MYR\s*([0-9,]+\.?[0-9]*)/i', $plainText, $match)) {
+            $totalAmount = floatval(str_replace(',', '', $match[1]));
+            $currency = 'MYR';
+            Log::info("✅ Extracted Total Tour Cost (MYR): MYR {$totalAmount}");
+        }
+        // ✅ PATTERN 3: Total Tour Cost with S$ (Singapore)
+        elseif (preg_match('/Total\s+Tour\s+Cost\s*[:\|]?\s*S\$\s*([0-9,]+\.?[0-9]*)/i', $plainText, $match)) {
+            $totalAmount = floatval(str_replace(',', '', $match[1]));
+            $currency = 'SGD';
+            Log::info("✅ Extracted Total Tour Cost (SGD): S$ {$totalAmount}");
+        }
+        // ✅ PATTERN 4: Total Tour Cost with SGD
+        elseif (preg_match('/Total\s+Tour\s+Cost\s*[:\|]?\s*SGD\s*([0-9,]+\.?[0-9]*)/i', $plainText, $match)) {
+            $totalAmount = floatval(str_replace(',', '', $match[1]));
+            $currency = 'SGD';
+            Log::info("✅ Extracted Total Tour Cost (SGD): SGD {$totalAmount}");
+        }
+        // ✅ PATTERN 5: Total Tour Cost with $ (USD) - but check if it's Singapore (has S$)
+        elseif (preg_match('/Total\s+Tour\s+Cost\s*[:\|]?\s*\$?\s*([0-9,]+\.?[0-9]*)/i', $plainText, $match)) {
+            $totalAmount = floatval(str_replace(',', '', $match[1]));
+            // Check if this is Singapore (look for S$ or Singapore in text)
+            if (stripos($plainText, 'S$') !== false || stripos($plainText, 'SGD') !== false || stripos($plainText, 'Singapore') !== false) {
+                $currency = 'SGD';
             } else {
-                // Try alternative patterns
-                if (preg_match('/Total\s*[Cc]ost[:\s]*([A-Z]{3})?\s*\$?\s*([0-9,]+\.?[0-9]*)/i', $plainText, $match)) {
-                    $totalAmount = floatval(str_replace(',', '', $match[2]));
-                    if (isset($match[1]) && !empty($match[1])) {
-                        $currency = strtoupper($match[1]);
-                    }
-                    Log::info("Found Total Cost: {$currency} {$totalAmount}");
-                } elseif (preg_match('/Amount[:\s]*([A-Z]{3})?\s*\$?\s*([0-9,]+\.?[0-9]*)/i', $plainText, $match)) {
-                    $totalAmount = floatval(str_replace(',', '', $match[2]));
-                    if (isset($match[1]) && !empty($match[1])) {
-                        $currency = strtoupper($match[1]);
-                    }
-                    Log::info("Found Amount: {$currency} {$totalAmount}");
-                }
+                $currency = 'USD';
             }
-            
-            // Extract number of guests
-            $numberOfGuests = null;
-            if (preg_match('/No\. of Guests?[:\s]*(\d+)\s*Adults?/i', $plainText, $match)) {
-                $numberOfGuests = intval($match[1]);
-                Log::info("Extracted Number of Guests: {$numberOfGuests}");
-            } elseif (preg_match('/No\. of Guests?[:\s]*(\d+)/i', $plainText, $match)) {
-                $numberOfGuests = intval($match[1]);
-                Log::info("Extracted Number of Guests: {$numberOfGuests}");
+            Log::info("✅ Extracted Total Tour Cost: {$currency} {$totalAmount}");
+        }
+        // ✅ PATTERN 6: Total Tour Cost with currency code (generic)
+        elseif (preg_match('/Total\s+Tour\s+Cost\s*[:\|]?\s*([A-Z]{3})?\s*([0-9,]+\.?[0-9]*)/i', $plainText, $match)) {
+            $totalAmount = floatval(str_replace(',', '', $match[2]));
+            if (isset($match[1]) && !empty($match[1])) {
+                $currency = strtoupper($match[1]);
+            } else {
+                $currency = $this->detectCurrencyFromText($plainText);
             }
-            
-            // Extract pax count
-            $paxCount = null;
-            if (preg_match('/No\. of Adult[:\s]*(\d+)/i', $plainText, $match)) {
-                $paxCount = intval($match[1]);
-                Log::info("Extracted Pax Count from Adult: {$paxCount}");
-            } elseif (preg_match('/(\d+)\s*Adults?/i', $plainText, $match)) {
-                $paxCount = intval($match[1]);
-                Log::info("Extracted Pax Count from Adults: {$paxCount}");
+            Log::info("✅ Extracted Total Tour Cost (generic): {$currency} {$totalAmount}");
+        }
+        
+        // ✅ If still no amount, try ANY amount with currency symbols
+        if (!$totalAmount) {
+            // Try RM (Malaysia)
+            if (preg_match('/RM\s*([0-9,]+\.?[0-9]*)/', $plainText, $match)) {
+                $totalAmount = floatval(str_replace(',', '', $match[1]));
+                $currency = 'MYR';
+                Log::info("✅ Found RM amount: {$currency} {$totalAmount}");
             }
-            
-            // Extract destination
-            $destination = $this->extractDestination($plainText, $subject);
-            
-            // Classification
-            $classification = $this->agentClassifier->classify($plainText, $fromEmail, $subject, $agentName);
-            
-            Log::info("Extracted Data", [
-                'subject' => $subject,
-                'invoice_number' => $invoiceNumber,
-                'tour_ref' => $tourRef,
-                'file_handler' => $fileHandler,
-                'agent_name' => $agentName,
-                'guest_name' => $guestName,
-                'travel_start' => $travelStart,
-                'travel_end' => $travelEnd,
-                'total_amount' => $totalAmount,
-                'currency' => $currency,
-                'pax_count' => $paxCount
-            ]);
-            
-            // Save to database
-            $emailData = [
-                'message_id' => $message['id'],
-                'from_email' => $fromEmail,
-                'from_name' => $fromName,
-                'subject' => $subject,
-                'body' => $htmlBody,
-                'body_preview' => substr($plainText, 0, 500),
-                'received_at' => $receivedAt,
-                'agent_name' => $agentName,
-                'guest_name' => $guestName,
-                'tour_ref' => $tourRef,
-                'invoice_number' => $invoiceNumber,
-                'file_handler' => $fileHandler,
-                'travel_start_date' => $travelStart,
-                'travel_end_date' => $travelEnd,
-                'number_of_guests' => $numberOfGuests,
-                'pax_count' => $paxCount,
-                'destination' => $destination,
-                'total_amount' => $totalAmount,
-                'currency' => $currency,
-                'reference_no' => $agentReferenceNo,
-                'credit_type' => $classification['credit_type'] ?? null,
-                'classification_reason' => $classification['reason'] ?? null,
-                'read_status' => $readStatus,
-                'processing_status' => 'processed',
-                'is_tour_confirmation' => $isTourConfirmation,
-                'has_attachments' => $message['hasAttachments'] ?? false,
-            ];
-            
+            // Try S$ (Singapore)
+            elseif (preg_match('/S\$\s*([0-9,]+\.?[0-9]*)/', $plainText, $match)) {
+                $totalAmount = floatval(str_replace(',', '', $match[1]));
+                $currency = 'SGD';
+                Log::info("✅ Found S$ amount: {$currency} {$totalAmount}");
+            }
+            // Try SGD
+            elseif (preg_match('/SGD\s*([0-9,]+\.?[0-9]*)/i', $plainText, $match)) {
+                $totalAmount = floatval(str_replace(',', '', $match[1]));
+                $currency = 'SGD';
+                Log::info("✅ Found SGD amount: {$currency} {$totalAmount}");
+            }
+            // Try USD
+            elseif (preg_match('/\$\s*([0-9,]+\.?[0-9]*)/', $plainText, $match)) {
+                $totalAmount = floatval(str_replace(',', '', $match[1]));
+                $currency = 'USD';
+                Log::info("✅ Found USD amount: {$currency} {$totalAmount}");
+            }
+        }
+        
+        // Extract number of guests
+        $numberOfGuests = null;
+        if (preg_match('/No\. of Guests?[:\s]*(\d+)\s*Adults?/i', $plainText, $match)) {
+            $numberOfGuests = intval($match[1]);
+        } elseif (preg_match('/No\. of Guests?[:\s]*(\d+)/i', $plainText, $match)) {
+            $numberOfGuests = intval($match[1]);
+        }
+        
+        $paxCount = null;
+        if (preg_match('/No\. of Adult[:\s]*(\d+)/i', $plainText, $match)) {
+            $paxCount = intval($match[1]);
+        } elseif (preg_match('/(\d+)\s*Adults?/i', $plainText, $match)) {
+            $paxCount = intval($match[1]);
+        }
+        
+        $destination = $this->extractDestination($plainText, $subject);
+        $classification = $this->agentClassifier->classify($plainText, $fromEmail, $subject, $agentName);
+        
+        $emailData = [
+            'message_id' => $message['id'],
+            'from_email' => $fromEmail ?: 'unknown@example.com',
+            'from_name' => $fromName ?: 'Unknown Sender',
+            'subject' => $subject ?: 'No Subject',
+            'body' => $htmlBody ?: $plainText,
+            'body_preview' => substr(($plainText ?: $htmlBody), 0, 500),
+            'received_at' => $receivedAt,
+            'agent_name' => $agentName,
+            'guest_name' => $guestName,
+            'tour_ref' => $tourRef,
+            'invoice_number' => $invoiceNumber,
+            'file_handler' => $fileHandler,
+            'travel_start_date' => $travelStart,
+            'travel_end_date' => $travelEnd,
+            'number_of_guests' => $numberOfGuests,
+            'pax_count' => $paxCount,
+            'destination' => $destination,
+            'total_amount' => $totalAmount,
+            'currency' => $currency ?: 'USD',
+            'reference_no' => $agentReferenceNo,
+            'credit_type' => $classification['credit_type'] ?? null,
+            'classification_reason' => $classification['reason'] ?? null,
+            'read_status' => $readStatus,
+            'processing_status' => 'processed',
+            'is_tour_confirmation' => $isTourConfirmation,
+            'has_attachments' => $message['hasAttachments'] ?? false,
+        ];
+        
+        Log::info("💾 FINAL - Total amount: {$currency} {$totalAmount} for: " . $subject);
+        
+        try {
             $email = IncomingEmail::create($emailData);
-            $this->autoGenerateInvoice($email);
-            
-            if (isset($message['attachments']) && !empty($message['attachments'])) {
-                $this->saveAttachments($message['attachments'], $email);
-            }
-            
-            Log::info("✅ Saved email: " . $subject);
-            return true;
-            
-        } catch (\Exception $e) {
-            Log::error('Save failed: ' . $e->getMessage() . ' - Subject: ' . ($message['subject'] ?? 'N/A'));
+            Log::info("💾 Saved email to database: " . $subject . " (ID: " . $email->id . ")");
+        } catch (\Illuminate\Database\QueryException $qe) {
+            Log::error('❌ Database error: ' . $qe->getMessage() . ' - Subject: ' . $subject);
+            Log::error('   Data: ' . json_encode($emailData, JSON_PARTIAL_OUTPUT_ON_ERROR));
             return false;
         }
+        
+        if ($isTourConfirmation && $tourRef != 'NA' && $invoiceNumber != 'NA') {
+            $this->autoGenerateInvoice($email);
+        }
+        
+        if (isset($message['attachments']) && !empty($message['attachments'])) {
+            $this->saveAttachments($message['attachments'], $email);
+        }
+        
+        Log::info("✅ Successfully saved email: " . $subject);
+        return true;
+        
+    } catch (\Exception $e) {
+        Log::error('❌ Save failed: ' . $e->getMessage() . ' - Subject: ' . ($message['subject'] ?? 'N/A'));
+        Log::error('   Trace: ' . $e->getTraceAsString());
+        return false;
     }
+}
+
+/**
+ * Detect currency from text context
+ */
+protected function detectCurrencyFromText($text)
+{
+    // Check for Singapore Dollar
+    if (stripos($text, 'S$') !== false || stripos($text, 'SGD') !== false) {
+        return 'SGD';
+    }
+    // Check for Malaysian Ringgit
+    if (stripos($text, 'RM') !== false || stripos($text, 'MYR') !== false) {
+        return 'MYR';
+    }
+    // Check for USD
+    if (stripos($text, '$') !== false || stripos($text, 'USD') !== false) {
+        return 'USD';
+    }
+    return 'USD';
+}
     
     protected function saveEmailWithPreview($message)
     {
         try {
             $subject = $message['subject'] ?? 'No Subject';
-            $htmlBody = $message['bodyPreview'] ?? '';
-            $plainText = $htmlBody;
+            $plainText = $message['bodyPreview'] ?? '';
             
             $fromEmail = $message['from']['emailAddress']['address'] ?? '';
             $fromName = $message['from']['emailAddress']['name'] ?? '';
@@ -397,7 +480,7 @@ class MicrosoftGraphService
                 'from_email' => $fromEmail,
                 'from_name' => $fromName,
                 'subject' => $subject,
-                'body' => $htmlBody,
+                'body' => $plainText,
                 'body_preview' => substr($plainText, 0, 500),
                 'received_at' => $receivedAt,
                 'agent_name' => $agentName,
@@ -417,38 +500,347 @@ class MicrosoftGraphService
             return true;
             
         } catch (\Exception $e) {
-            Log::error('Save preview failed: ' . $e->getMessage());
+            Log::error('❌ Save preview failed: ' . $e->getMessage() . ' - Subject: ' . ($message['subject'] ?? 'N/A'));
             return false;
         }
     }
-    
-    protected function autoGenerateInvoice($email)
-    {
-        try {
-            if (GeneratedInvoice::where('email_id', $email->id)->exists()) {
-                Log::info("⏭️ Invoice already exists for email: " . $email->subject);
-                return;
-            }
-            
-            if ($email->tour_ref == 'NA' || $email->invoice_number == 'NA') {
-                Log::info("⏭️ Skipping auto-generate - missing tour_ref or invoice_number");
-                return;
-            }
-            
-            $invoiceService = app(InvoiceGenerationService::class);
-            $invoice = $invoiceService->generateFromEmail($email);
-            
-            if ($invoice) {
-                Log::info("✅ Auto-generated invoice: " . $invoice->invoice_number);
-            } else {
-                Log::warning("⚠️ Invoice generation returned null for email: " . $email->subject);
-            }
-            
-        } catch (\Exception $e) {
-            Log::error('❌ Auto-generate invoice failed: ' . $e->getMessage());
-        }
+    /**
+ * ✅ EMERGENCY FIX: Save email with minimal data (fallback when full save fails)
+ */
+protected function saveEmailMinimal($message)
+{
+    try {
+        $subject = $message['subject'] ?? 'No Subject';
+        $htmlBody = $message['body']['content'] ?? $message['bodyPreview'] ?? '';
+        $plainText = $this->htmlToPlainText($htmlBody);
+        
+        $fromEmail = $message['from']['emailAddress']['address'] ?? 'unknown@example.com';
+        $fromName = $message['from']['emailAddress']['name'] ?? 'Unknown Sender';
+        $receivedAt = Carbon::parse($message['receivedDateTime']);
+        $readStatus = isset($message['isRead']) ? ($message['isRead'] ? 'read' : 'unread') : 'unread';
+        
+        // Try to extract tour ref and invoice number if possible
+        $invoiceNumber = $this->extractInvoiceNumber($plainText);
+        $invoiceNumber = $this->cleanInvoiceNumber($invoiceNumber);
+        $tourRef = $this->extractTourReference($plainText);
+        
+        if (!$tourRef) $tourRef = "NA";
+        if (!$invoiceNumber) $invoiceNumber = "NA";
+        
+        // ✅ MINIMAL DATA - only essential fields
+        $emailData = [
+            'message_id' => $message['id'],
+            'from_email' => $fromEmail,
+            'from_name' => $fromName,
+            'subject' => $subject,
+            'body' => $htmlBody ?: $plainText,
+            'body_preview' => substr(($plainText ?: $htmlBody), 0, 500),
+            'received_at' => $receivedAt,
+            'tour_ref' => $tourRef,
+            'invoice_number' => $invoiceNumber,
+            'read_status' => $readStatus,
+            'processing_status' => 'processed',
+            'is_tour_confirmation' => stripos($plainText, 'TOUR CONFIRMATION') !== false,
+            'has_attachments' => $message['hasAttachments'] ?? false,
+            // Set nullable fields to null
+            'agent_name' => null,
+            'guest_name' => null,
+            'file_handler' => null,
+            'travel_start_date' => null,
+            'travel_end_date' => null,
+            'number_of_guests' => null,
+            'pax_count' => null,
+            'destination' => null,
+            'total_amount' => null,
+            'currency' => 'USD',
+            'reference_no' => null,
+            'credit_type' => null,
+            'classification_reason' => null,
+        ];
+        
+        $email = IncomingEmail::create($emailData);
+        Log::info("💾 Saved email with MINIMAL data: " . $subject . " (ID: " . $email->id . ")");
+        return true;
+        
+    } catch (\Exception $e) {
+        Log::error('❌ Minimal save failed: ' . $e->getMessage() . ' - Subject: ' . ($message['subject'] ?? 'N/A'));
+        Log::error('   Trace: ' . $e->getTraceAsString());
+        return false;
     }
-    
+}
+protected function autoGenerateInvoice($email)
+{
+    try {
+        if (GeneratedInvoice::where('email_id', $email->id)->exists()) {
+            Log::info("⏭️ Invoice already exists for email: " . $email->subject);
+            return;
+        }
+        
+        if ($email->tour_ref == 'NA' || $email->invoice_number == 'NA') {
+            Log::info("⏭️ Skipping auto-generate - missing tour_ref or invoice_number for: " . $email->subject);
+            return;
+        }
+        
+        Log::info("🏷️ Generating invoice for: " . $email->subject);
+        
+        $invoiceService = app(InvoiceGenerationService::class);
+        $invoice = $invoiceService->generateFromEmail($email);
+        
+        if ($invoice) {
+            Log::info("✅ Auto-generated invoice: " . $invoice->invoice_number);
+            
+            // ✅ Send email
+            $this->sendInvoiceEmail($invoice);
+            Log::info("📧 Email sent for invoice: " . $invoice->invoice_number);
+            
+        } else {
+            Log::warning("⚠️ Invoice generation returned null for email: " . $email->subject);
+        }
+        
+    } catch (\Exception $e) {
+        Log::error('❌ Auto-generate invoice failed: ' . $e->getMessage());
+    }
+}
+/**
+ * ✅ Send Invoice Email - Added to MicrosoftGraphService
+ */
+protected function sendInvoiceEmail($invoice)
+{
+    try {
+        // Determine email type
+        $emailType = 'credit';
+        
+        if ($invoice->is_revision) {
+            $emailType = 'revision';
+        } elseif ($invoice->invoice_type == 'non_credit') {
+            $emailType = 'non_credit';
+        }
+        
+        // Send email
+        Mail::to('kevinraj@aahaas.com')
+            ->cc('raja.lakshmi@aahaas.com')
+            ->send(new InvoiceMail($invoice, $emailType));
+        
+        Log::info("📧 Invoice email sent for: " . $invoice->invoice_number);
+        
+    } catch (\Exception $e) {
+        Log::error('❌ Failed to send invoice email: ' . $e->getMessage());
+    }
+}
+public function debugFetchEmails()
+{
+    try {
+        set_time_limit(600);
+        
+        $allMessages = [];
+        $nextLink = null;
+        $pageCount = 0;
+        $totalFetched = 0;
+        
+        $baseUrl = 'https://graph.microsoft.com/v1.0/users/' . env('GRAPH_INVOICE_USER') . '/mailfolders/inbox/messages';
+        
+        Log::info("🚀 DEBUG: Starting to fetch emails from INBOX...");
+        
+        // ✅ Get existing message IDs as a SET for faster lookup
+        $existingIds = IncomingEmail::pluck('message_id')->toArray();
+        $existingIdSet = array_flip($existingIds); // Flip for O(1) lookup
+        Log::info("📊 DEBUG: Found " . count($existingIds) . " existing emails in database");
+        
+        $failedEmails = [];
+        $successEmails = [];
+        $skippedEmails = [];
+        
+        do {
+            $url = $nextLink ?? $baseUrl . '?' . http_build_query([
+                '$top' => $this->batchSize,
+                '$orderby' => 'receivedDateTime desc',
+                '$select' => 'id,subject,bodyPreview,from,receivedDateTime,isRead,hasAttachments',
+            ]);
+            
+            Log::info("📡 DEBUG: Fetching page " . ($pageCount + 1));
+            
+            $response = Http::withToken($this->accessToken)
+                ->timeout(180)
+                ->get($url);
+            
+            if (!$response->ok()) {
+                Log::error('DEBUG: Failed to fetch emails page: ' . $response->body());
+                break;
+            }
+            
+            $data = $response->json();
+            $messages = $data['value'] ?? [];
+            
+            if (empty($messages)) {
+                Log::info("DEBUG: No more messages to fetch");
+                break;
+            }
+            
+            Log::info("📥 DEBUG: Page " . ($pageCount + 1) . " has " . count($messages) . " messages");
+            
+            foreach ($messages as $message) {
+                $messageId = $message['id'];
+                $subject = $message['subject'] ?? 'NO SUBJECT';
+                
+                // ✅ FIXED: Use isset() for faster lookup
+                if (isset($existingIdSet[$messageId])) {
+                    $skippedEmails[] = $subject;
+                    Log::info("⏭️ DEBUG: Skipping existing email: " . $subject);
+                    continue;
+                }
+                
+                // ✅ Add to existing set to avoid duplicates within this batch
+                $existingIdSet[$messageId] = true;
+                
+                try {
+                    $fullMessage = $this->fetchFullMessage($messageId);
+                    
+                    if ($fullMessage) {
+                        // ✅ Try full save first
+                        $result = $this->saveEmail($fullMessage);
+                        if ($result === true) {
+                            $successEmails[] = $subject;
+                            Log::info("✅ DEBUG: Saved (full): " . $subject);
+                            continue;
+                        }
+                        
+                        // ✅ If full save fails, try minimal save
+                        Log::warning("⚠️ Full save failed, trying minimal save: " . $subject);
+                        $result = $this->saveEmailMinimal($fullMessage);
+                        if ($result === true) {
+                            $successEmails[] = $subject . ' (minimal)';
+                            Log::info("✅ DEBUG: Saved (minimal): " . $subject);
+                            continue;
+                        }
+                    } else {
+                        // Try preview
+                        $result = $this->saveEmailWithPreview($message);
+                        if ($result === true) {
+                            $successEmails[] = $subject . ' (preview)';
+                            Log::info("✅ DEBUG: Saved with preview: " . $subject);
+                            continue;
+                        }
+                        
+                        // If preview fails, try minimal
+                        $result = $this->saveEmailMinimal($message);
+                        if ($result === true) {
+                            $successEmails[] = $subject . ' (minimal from preview)';
+                            Log::info("✅ DEBUG: Saved (minimal from preview): " . $subject);
+                            continue;
+                        }
+                    }
+                    
+                    // If all attempts fail
+                    $failedEmails[] = [
+                        'subject' => $subject,
+                        'reason' => 'All save attempts failed'
+                    ];
+                    Log::error("❌ DEBUG: All save attempts failed for: " . $subject);
+                    
+                } catch (\Exception $e) {
+                    $failedEmails[] = [
+                        'subject' => $subject,
+                        'reason' => $e->getMessage()
+                    ];
+                    Log::error("❌ DEBUG: Exception: " . $subject . " - " . $e->getMessage());
+                }
+            }
+            
+            $nextLink = $data['@odata.nextLink'] ?? null;
+            $pageCount++;
+            
+            if (!$nextLink) {
+                Log::info("✅ DEBUG: Reached end of mailbox");
+                break;
+            }
+            
+            usleep(200000);
+            
+        } while ($nextLink);
+        
+        Log::info("📊 DEBUG SUMMARY:");
+        Log::info("   Total successful: " . count($successEmails));
+        Log::info("   Total skipped (existing): " . count($skippedEmails));
+        Log::info("   Total failed: " . count($failedEmails));
+        
+        if (!empty($failedEmails)) {
+            Log::info("❌ FAILED EMAILS DETAILS:");
+            foreach ($failedEmails as $index => $failed) {
+                Log::info("   " . ($index + 1) . ". " . $failed['subject'] . " - Reason: " . $failed['reason']);
+            }
+        }
+        
+        return [
+            'success' => count($successEmails),
+            'skipped' => count($skippedEmails),
+            'failed' => count($failedEmails),
+            'failed_details' => $failedEmails
+        ];
+        
+    } catch (\Exception $e) {
+        Log::error('DEBUG Error: ' . $e->getMessage() . "\n" . $e->getTraceAsString());
+        return ['error' => $e->getMessage()];
+    }
+}
+/**
+ * ✅ DEBUG: Test saving one email and show exact database error
+ */
+public function debugSaveOne($messageId)
+{
+    try {
+        echo "🔍 Testing email: " . $messageId . "\n";
+        
+        // Check if already exists
+        $exists = IncomingEmail::where('message_id', $messageId)->exists();
+        if ($exists) {
+            echo "⚠️ Email already exists in database!\n";
+            $existing = IncomingEmail::where('message_id', $messageId)->first();
+            echo "   Existing ID: " . $existing->id . "\n";
+            echo "   Subject: " . $existing->subject . "\n";
+            return;
+        }
+        
+        $fullMessage = $this->fetchFullMessage($messageId);
+        if (!$fullMessage) {
+            echo "❌ Could not fetch message\n";
+            return;
+        }
+        
+        echo "✅ Subject: " . ($fullMessage['subject'] ?? 'No Subject') . "\n";
+        echo "📝 Attempting to save...\n";
+        
+        // Try minimal data
+        $emailData = [
+            'message_id' => $fullMessage['id'],
+            'from_email' => $fullMessage['from']['emailAddress']['address'] ?? 'unknown@example.com',
+            'from_name' => $fullMessage['from']['emailAddress']['name'] ?? 'Unknown',
+            'subject' => $fullMessage['subject'] ?? 'No Subject',
+            'body' => $fullMessage['body']['content'] ?? $fullMessage['bodyPreview'] ?? '',
+            'body_preview' => substr(($fullMessage['bodyPreview'] ?? ''), 0, 500),
+            'received_at' => Carbon::parse($fullMessage['receivedDateTime']),
+            'tour_ref' => 'NA',
+            'invoice_number' => 'NA',
+            'read_status' => isset($fullMessage['isRead']) ? ($fullMessage['isRead'] ? 'read' : 'unread') : 'unread',
+            'processing_status' => 'processed',
+            'is_tour_confirmation' => false,
+            'has_attachments' => $fullMessage['hasAttachments'] ?? false,
+        ];
+        
+        // ✅ Log what we're saving
+        Log::info("DEBUG SAVE - Data: " . json_encode($emailData, JSON_PARTIAL_OUTPUT_ON_ERROR));
+        
+        $email = IncomingEmail::create($emailData);
+        echo "✅ SUCCESS! Saved with ID: " . $email->id . "\n";
+        
+    } catch (\Illuminate\Database\QueryException $qe) {
+        echo "❌ DATABASE ERROR: " . $qe->getMessage() . "\n";
+        echo "   SQL: " . $qe->getSql() . "\n";
+        echo "   Bindings: " . json_encode($qe->getBindings()) . "\n";
+    } catch (\Exception $e) {
+        echo "❌ ERROR: " . $e->getMessage() . "\n";
+        echo "   File: " . $e->getFile() . ":" . $e->getLine() . "\n";
+    }
+}
     /**
      * Convert HTML to plain text while preserving line breaks
      */

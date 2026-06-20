@@ -7,12 +7,14 @@ use Barryvdh\DomPDF\Facade\Pdf;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Log;
 use App\Models\AgentGst;
+use App\Mail\InvoiceMail;
+use Illuminate\Support\Facades\Mail;
 
 class InvoiceGenerationService
 {
     private $revisionCounters = [];
 
-  public function generateFromEmail($email, $classification = null, $revisionNumber = null)
+public function generateFromEmail($email, $classification = null, $revisionNumber = null)
 {
     if (!$classification) {
         $agentClassifier = new AgentClassificationService();
@@ -23,14 +25,13 @@ class InvoiceGenerationService
             $email->agent_name
         );
     }
+
     $gstNumber = null;
     if ($email->agent_name) {
         $agentName = trim($email->agent_name);
         
-        // Try exact match first
         $agentGst = AgentGst::whereRaw('LOWER(agent_name) = LOWER(?)', [$agentName])->first();
         
-        // If not found, try partial match
         if (!$agentGst) {
             $searchName = preg_replace('/\s+(AGENT|TRAVEL|TOURS|PVT|LTD|PRIVATE|LIMITED|LLP|HOLIDAYS|INTERNATIONAL|SOLUTIONS)/i', '', $agentName);
             $searchName = trim($searchName);
@@ -41,130 +42,256 @@ class InvoiceGenerationService
             $gstNumber = $agentGst->gst_number;
         }
     }
-          $salesPerson = $email->sales_person ?? null;
-        // Generate invoice number with revision support
-        $baseInvoiceNumber = $email->invoice_number;
-        $invoiceNumber = $this->getInvoiceNumberWithRevision($baseInvoiceNumber, $revisionNumber);
+
+    $salesPerson = $email->sales_person ?? null;
+
+    // ✅ Get base invoice number
+    $baseInvoiceNumber = $email->invoice_number;
+    $cleanBase = $this->cleanBaseNumber($baseInvoiceNumber);
+    
+    // ✅ Check if ANY invoice with this base number exists
+    $existingInvoices = GeneratedInvoice::where('original_invoice_number', $cleanBase)
+        ->orWhere('invoice_number', 'LIKE', $cleanBase . '%')
+        ->orderBy('id', 'asc')
+        ->get();
+    
+    $totalRevisions = $existingInvoices->count();
+    
+    // ✅ Determine the invoice number
+    if ($totalRevisions == 0) {
+        $displayInvoiceNumber = $cleanBase;
+        $fileInvoiceNumber = $cleanBase;
+        $currentRevision = 0;
+        $totalRevisionsCount = 0;
+        $isRevision = false;
+        $newTotal = 0;
+    } else {
+        $existingForEmail = $existingInvoices->where('email_id', $email->id)->first();
         
-        // Create directory
-        $directory = storage_path('app/public/invoices');
-        if (!File::exists($directory)) {
-            File::makeDirectory($directory, 0755, true);
+        if ($existingForEmail) {
+            Log::info("⏭️ Invoice {$cleanBase} already exists for this email. Returning existing.");
+            return $existingForEmail;
         }
         
-        // Get dynamic values from email
-        $totalUSD = $email->total_amount ?? 0;
+        $isRevision = true;
+        $newTotal = $totalRevisions + 1;
+        $currentRevision = $newTotal;
         
-        // Get number of guests from database
-        $totalGuests = (int)($email->number_of_guests ?? $email->pax_count ?? 1);
-        if ($totalGuests < 1) {
-            $totalGuests = 1;
-        }
+        $displayInvoiceNumber = $cleanBase . '_R' . $currentRevision . '/R' . $newTotal;
+        $fileInvoiceNumber = $cleanBase . '_R' . $currentRevision . '_R' . $newTotal;
         
-        $exchangeRate = $email->exchange_rate ?? $this->getExchangeRate();
-        $handlingFeePerPersonUSD = 5;
+        $this->updatePreviousRevisions($cleanBase, $newTotal);
         
-        $hasHandlingFee = $classification['has_handling_fee'] ?? false;
-        $invoiceFormat = $classification['invoice_format'] ?? 'apple_holidays';
-        $currency = $classification['currency'] ?? 'USD';
-        
-        if (!$hasHandlingFee) {
-            $handlingFee = 0;
-            $grandTotal = $totalUSD;
-            $currency = 'USD';
-            $calculations = null;
-        } else {
-            $perPersonUSD = $totalUSD / $totalGuests;
-            $netPerPersonUSD = $perPersonUSD - $handlingFeePerPersonUSD;
-            $netPerPersonINR = $netPerPersonUSD * $exchangeRate;
-            $totalTourCostINR = $netPerPersonINR * $totalGuests;
-            $handlingFeePerPersonINR = $handlingFeePerPersonUSD * $exchangeRate;
-            $totalHandlingFeeINR = $handlingFeePerPersonINR * $totalGuests;
-            $subTotalINR = $totalTourCostINR + $totalHandlingFeeINR;
-            
-            $cgstPercent = $email->cgst_percent ?? 9;
-            $sgstPercent = $email->sgst_percent ?? 9;
-            $cgst = $totalHandlingFeeINR * ($cgstPercent / 100);
-            $sgst = $totalHandlingFeeINR * ($sgstPercent / 100);
-            $finalGrandTotal = $subTotalINR + $cgst + $sgst;
-            
-            $handlingFee = $totalHandlingFeeINR;
-            $grandTotal = $finalGrandTotal;
-            $currency = 'INR';
-            
-            $calculations = [
-                'original_usd' => $totalUSD,
-                'total_guests' => $totalGuests,
-                'per_person_usd' => $perPersonUSD,
-                'handling_fee_per_person_usd' => $handlingFeePerPersonUSD,
-                'net_per_person_usd' => $netPerPersonUSD,
-                'exchange_rate' => $exchangeRate,
-                'net_per_person_inr' => $netPerPersonINR,
-                'handling_fee_per_person_inr' => $handlingFeePerPersonINR,
-                'total_tour_cost_inr' => $totalTourCostINR,
-                'total_handling_fee_inr' => $totalHandlingFeeINR,
-                'sub_total_inr' => $subTotalINR,
-                'cgst_percent' => $cgstPercent,
-                'cgst_amount' => $cgst,
-                'sgst_percent' => $sgstPercent,
-                'sgst_amount' => $sgst,
-                'final_total_inr' => $finalGrandTotal,
-                'gst_number' => $gstNumber,
-                'sales_person' => $salesPerson,
-            ];
-        }
-        
-        // Check if invoice with this number already exists (for revision tracking)
-        $existingInvoice = GeneratedInvoice::where('invoice_number', $invoiceNumber)->first();
-        $isRevision = ($revisionNumber !== null) || ($existingInvoice && $existingInvoice->revision_number > 0);
-        
-        // Create invoice record
-        $invoice = GeneratedInvoice::create([
-            'email_id' => $email->id,
-            'invoice_number' => $invoiceNumber,
-            'invoice_date' => now()->format('Y-m-d'),
-            'customer_name' => $email->agent_name ?? ($email->guest_name ?? 'Unknown Customer'),
-            'guest_name' => $email->guest_name,
-            'tour_ref' => $email->tour_ref,
-            'total_amount' => $totalUSD,
-            'handling_fee' => $handlingFee,
-            'grand_total' => $grandTotal,
-            'currency' => $currency,
-            'invoice_type' => $classification['credit_type'],
-            'status' => 'draft',
-            'file_path' => null,
-            'calculations' => $calculations ? json_encode($calculations) : null,
-             'revision_number' => 0,
-        'is_revision' => false,
-            'original_invoice_number' => $baseInvoiceNumber,
-              'gst_number' => $gstNumber,          // ✅ Add this
-    'sales_person' => $salesPerson, 
-        ]);
-        
-        // Generate PDF based on invoice format
-        if ($invoiceFormat == 'apple_holidays') {
-            $html = $this->generateAppleHolidaysInvoiceHTML($invoice, $email);
-        } else {
-            $html = $this->generateSharmilaInvoiceHTML($invoice, $email, $calculations);
-        }
-        
-        $pdf = Pdf::loadHTML($html);
-        $filename = "invoices/{$invoice->invoice_number}.pdf";
-        $pdf->save(storage_path("app/public/{$filename}"));
-        
-        $invoice->file_path = $filename;
-        $invoice->save();
-        
-        return $invoice;
+        Log::info("📄 Revision detected: New total = {$newTotal}, Current = {$currentRevision}");
+        Log::info("📄 Display: {$displayInvoiceNumber}, File: {$fileInvoiceNumber}");
     }
     
-    /**
-     * Generate invoice number with revision suffix (e.g., IS43595R1, IS43595R2, IS43595R3)
-     */
-    /**
- * Generate invoice number with revision suffix (e.g., IS43595R1, IS43595R2, IS43595R3)
- * Now handles spaces in original invoice number
- */
+    // Create directory
+    $directory = storage_path('app/public/invoices');
+    if (!File::exists($directory)) {
+        File::makeDirectory($directory, 0755, true);
+    }
+    
+    // ✅ STEP 1: Get HTML body and plain text
+    $htmlBody = $email->body ?? '';
+    $plainText = $this->htmlToPlainText($htmlBody);
+    
+    // ✅ STEP 2: Extract total amount from email
+    $originalAmount = $email->total_amount ?? 0;
+    $originalCurrency = 'USD';
+    
+    // ✅ STEP 3: Detect currency from email body
+    $detectedCurrency = $this->detectCurrency($plainText);
+    Log::info("Detected currency: {$detectedCurrency}");
+    
+    // ✅ STEP 4: Convert amount based on detected currency
+    $totalAmount = $originalAmount;
+    $currency = $detectedCurrency;
+    
+    // If currency is not USD, convert to INR for calculations
+    if ($detectedCurrency == 'SGD' || $detectedCurrency == 'MYR' || $detectedCurrency == 'VND' || $detectedCurrency == 'LKR') {
+        $originalAmount = $totalAmount;
+        $totalAmount = $this->convertToINR($totalAmount, $detectedCurrency);
+        $currency = 'INR';
+        $hasHandlingFee = true; // Force handling fee for non-USD currencies
+        Log::info("Converted {$originalAmount} {$detectedCurrency} to INR {$totalAmount}");
+    } else {
+        // For USD, use the original amount
+        $totalAmount = $originalAmount;
+        $currency = 'USD';
+    }
+    
+    $totalGuests = (int)($email->number_of_guests ?? $email->pax_count ?? 1);
+    if ($totalGuests < 1) {
+        $totalGuests = 1;
+    }
+    
+    $exchangeRate = $email->exchange_rate ?? $this->getExchangeRate();
+    $handlingFeePerPersonUSD = 5;
+    
+    // ✅ STEP 5: Get classification values
+    $hasHandlingFee = $classification['has_handling_fee'] ?? false;
+    $invoiceFormat = $classification['invoice_format'] ?? 'apple_holidays';
+    $currency = $classification['currency'] ?? $currency; // Use detected currency if not set
+    
+    // ✅ STEP 6: Calculate invoice amounts
+    if (!$hasHandlingFee) {
+        // No handling fee - Direct amount
+        $handlingFee = 0;
+        $grandTotal = $totalAmount;
+        $currency = $currency;
+        $calculations = null;
+    } else {
+        // With handling fee - Convert to INR
+        $perPersonUSD = $totalAmount / $totalGuests;
+        $netPerPersonUSD = $perPersonUSD - $handlingFeePerPersonUSD;
+        $netPerPersonINR = $netPerPersonUSD * $exchangeRate;
+        $totalTourCostINR = $netPerPersonINR * $totalGuests;
+        $handlingFeePerPersonINR = $handlingFeePerPersonUSD * $exchangeRate;
+        $totalHandlingFeeINR = $handlingFeePerPersonINR * $totalGuests;
+        $subTotalINR = $totalTourCostINR + $totalHandlingFeeINR;
+        
+        $cgstPercent = $email->cgst_percent ?? 9;
+        $sgstPercent = $email->sgst_percent ?? 9;
+        $cgst = $totalHandlingFeeINR * ($cgstPercent / 100);
+        $sgst = $totalHandlingFeeINR * ($sgstPercent / 100);
+        $finalGrandTotal = $subTotalINR + $cgst + $sgst;
+        
+        $handlingFee = $totalHandlingFeeINR;
+        $grandTotal = $finalGrandTotal;
+        $currency = 'INR';
+        
+        $calculations = [
+            'original_amount' => $totalAmount,
+            'original_currency' => $detectedCurrency,
+            'total_guests' => $totalGuests,
+            'per_person_amount' => $perPersonUSD,
+            'handling_fee_per_person_usd' => $handlingFeePerPersonUSD,
+            'net_per_person_usd' => $netPerPersonUSD,
+            'exchange_rate' => $exchangeRate,
+            'net_per_person_inr' => $netPerPersonINR,
+            'handling_fee_per_person_inr' => $handlingFeePerPersonINR,
+            'total_tour_cost_inr' => $totalTourCostINR,
+            'total_handling_fee_inr' => $totalHandlingFeeINR,
+            'sub_total_inr' => $subTotalINR,
+            'cgst_percent' => $cgstPercent,
+            'cgst_amount' => $cgst,
+            'sgst_percent' => $sgstPercent,
+            'sgst_amount' => $sgst,
+            'final_total_inr' => $finalGrandTotal,
+            'gst_number' => $gstNumber,
+            'sales_person' => $salesPerson,
+            'detected_currency' => $detectedCurrency,
+        ];
+    }
+    
+    // ✅ Create invoice record
+    $invoice = GeneratedInvoice::create([
+        'email_id' => $email->id,
+        'invoice_number' => $displayInvoiceNumber,
+        'invoice_date' => now()->format('Y-m-d'),
+        'customer_name' => $email->agent_name ?? ($email->guest_name ?? 'Unknown Customer'),
+        'guest_name' => $email->guest_name,
+        'tour_ref' => $email->tour_ref,
+        'total_amount' => $totalAmount,
+        'handling_fee' => $handlingFee,
+        'grand_total' => $grandTotal,
+        'currency' => $currency,
+        'invoice_type' => $classification['credit_type'],
+        'status' => 'draft',
+        'file_path' => null,
+        'calculations' => $calculations ? json_encode($calculations) : null,
+        'revision_number' => $currentRevision,
+        'total_revisions' => $newTotal,
+        'is_revision' => $isRevision,
+        'original_invoice_number' => $cleanBase,
+        'gst_number' => $gstNumber,
+        'sales_person' => $salesPerson,
+    ]);
+    
+    // Generate PDF based on invoice format
+    if ($invoiceFormat == 'apple_holidays') {
+        $html = $this->generateAppleHolidaysInvoiceHTML($invoice, $email);
+    } else {
+        $html = $this->generateSharmilaInvoiceHTML($invoice, $email, $calculations);
+    }
+    
+    $pdf = Pdf::loadHTML($html);
+    $filename = "invoices/{$fileInvoiceNumber}.pdf";
+    $pdf->save(storage_path("app/public/{$filename}"));
+    
+    $invoice->file_path = $filename;
+    $invoice->save();
+    
+    Log::info("✅ Created invoice: {$displayInvoiceNumber}");
+    
+    return $invoice;
+}
+
+   protected function updatePreviousRevisions($baseNumber, $newTotal)
+{
+    $cleanBase = $this->cleanBaseNumber($baseNumber);
+    
+    $existingInvoices = GeneratedInvoice::where('original_invoice_number', $cleanBase)
+        ->orWhere('invoice_number', 'LIKE', $cleanBase . '%')
+        ->where('is_revision', true)
+        ->get();
+    
+    Log::info("🔄 Updating " . $existingInvoices->count() . " previous revisions to total: {$newTotal}");
+    
+    foreach ($existingInvoices as $inv) {
+        // Update the total_revisions field
+        $inv->total_revisions = $newTotal;
+        
+        // ✅ Update invoice number with DISPLAY format: IS48329_R2/R3
+        if (preg_match('/_R(\d+)\/R\d+$/', $inv->invoice_number, $matches)) {
+            $revNum = $matches[1];
+            $newDisplayNumber = $cleanBase . '_R' . $revNum . '/R' . $newTotal;
+            $inv->invoice_number = $newDisplayNumber;
+            
+            Log::info("🔄 Updated display: {$newDisplayNumber} (Total: {$newTotal})");
+            
+            // ✅✅✅ CRITICAL FIX: Rename the file and update file_path
+            $oldFilePath = $inv->file_path;
+            if ($oldFilePath) {
+                // Convert from old format to new file format
+                $newFileNumber = $cleanBase . '_R' . $revNum . '_R' . $newTotal;
+                $newFilePath = "invoices/{$newFileNumber}.pdf";
+                
+                $oldFullPath = storage_path("app/public/{$oldFilePath}");
+                $newFullPath = storage_path("app/public/{$newFilePath}");
+                
+                Log::info("🔄 Renaming file: {$oldFullPath} -> {$newFullPath}");
+                
+                if (File::exists($oldFullPath)) {
+                    // ✅ Rename the file
+                    File::move($oldFullPath, $newFullPath);
+                    $inv->file_path = $newFilePath;
+                    Log::info("✅ File renamed successfully: {$newFilePath}");
+                } else {
+                    // ✅ If file doesn't exist, just update the path
+                    Log::warning("⚠️ File not found: {$oldFullPath}, updating path only");
+                    $inv->file_path = $newFilePath;
+                }
+            }
+        }
+        
+        // ✅✅✅ CRITICAL: SAVE the changes!
+        $inv->save();
+        Log::info("✅ Saved invoice: {$inv->invoice_number} with file_path: {$inv->file_path}");
+    }
+}
+
+
+  protected function cleanBaseNumber($number)
+    {
+        // Remove _R{num}/R{total} or _R{num}_R{total} or R{num} patterns
+        $cleaned = preg_replace('/_R\d+\/R\d+$/', '', $number);
+        $cleaned = preg_replace('/_R\d+_R\d+$/', '', $cleaned);
+        $cleaned = preg_replace('/R\d+$/', '', $cleaned);
+        return $cleaned;
+    }
+
 protected function getInvoiceNumberWithRevision($baseNumber, $revisionNumber = null)
 {
     // Clean the base number
@@ -187,46 +314,146 @@ protected function getInvoiceNumberWithRevision($baseNumber, $revisionNumber = n
     return $cleanBase;  // First invoice: IS43595
 }
     
-    /**
-     * Get settlement date based on invoice type
-     */
-   protected function getSettlementDate($travelStartDate, $isUSD = true)
+
+/**
+ * Get settlement date based on invoice type
+ * 
+ * For Apple Holidays (Credit USD):
+ * - Travel 1st-15th → Settlement 16th of same month
+ * - Travel 16th-31st → Settlement 1st of next month
+ * 
+ * For Sharmila (Non-Credit INR):
+ * - 15 days before travel start date
+ */
+protected function getSettlementDate($travelStartDate, $isUSD = true)
 {
-    $daysBeforeTravel = $isUSD ? 10 : 15;
+    // ✅ For Sharmila (Non-Credit INR) - 15 days before travel
+    if (!$isUSD) {
+        if (!$travelStartDate) {
+            $defaultDate = new \DateTime();
+            $defaultDate->modify('+15 days');
+            return $defaultDate->format('d/m/Y');
+        }
+        
+        try {
+            $travelDate = $this->parseDate($travelStartDate);
+            if ($travelDate) {
+                // 15 days before travel
+                $settlementDate = clone $travelDate;
+                $settlementDate->modify('-15 days');
+                return $settlementDate->format('d/m/Y');
+            }
+        } catch (\Exception $e) {
+            Log::error("Date parsing error for Sharmila: " . $e->getMessage());
+        }
+        
+        $fallbackDate = new \DateTime();
+        $fallbackDate->modify('+15 days');
+        return $fallbackDate->format('d/m/Y');
+    }
     
+    // ✅ For Apple Holidays (Credit USD) - Based on travel date
     if (!$travelStartDate) {
         $defaultDate = new \DateTime();
-        $defaultDate->modify('+' . $daysBeforeTravel . ' days');
+        $defaultDate->modify('+10 days');
         return $defaultDate->format('d/m/Y');
     }
     
     try {
-        $travelDate = null;
-        if (strpos($travelStartDate, '-') !== false) {
-            $travelDate = new \DateTime($travelStartDate);
-        } elseif (strpos($travelStartDate, '/') !== false) {
-            $travelDate = \DateTime::createFromFormat('d/m/Y', $travelStartDate);
-            if (!$travelDate) {
-                $travelDate = \DateTime::createFromFormat('m/d/Y', $travelStartDate);
-            }
-        }
+        $travelDate = $this->parseDate($travelStartDate);
         
         if ($travelDate) {
-            $settlementDate = clone $travelDate;
-            $settlementDate->modify('-' . $daysBeforeTravel . ' days');
+            $day = (int)$travelDate->format('d');
+            $month = (int)$travelDate->format('m');
+            $year = (int)$travelDate->format('Y');
             
-            $today = new \DateTime();
-            // Only replace with today if settlement date is more than 30 days past? Or never?
-            // Option: Never replace, always use calculated date
+            // ✅ Rule: 1-15 → 16th same month, 16-31 → 1st next month
+            if ($day >= 1 && $day <= 15) {
+                $settlementDate = new \DateTime("{$year}-{$month}-16");
+                Log::info("📅 Apple Holidays Settlement: Travel on {$day}/{$month} → 16/{$month}");
+            } else {
+                $nextMonth = $month + 1;
+                $nextYear = $year;
+                if ($nextMonth > 12) {
+                    $nextMonth = 1;
+                    $nextYear = $year + 1;
+                }
+                $settlementDate = new \DateTime("{$nextYear}-{$nextMonth}-01");
+                Log::info("📅 Apple Holidays Settlement: Travel on {$day}/{$month} → 01/{$nextMonth}");
+            }
+            
             return $settlementDate->format('d/m/Y');
         }
+        
     } catch (\Exception $e) {
-        Log::error("Date parsing error: " . $e->getMessage());
+        Log::error("Date parsing error for Apple Holidays: " . $e->getMessage());
     }
     
+    // Fallback for Apple Holidays
     $fallbackDate = new \DateTime();
-    $fallbackDate->modify('+' . $daysBeforeTravel . ' days');
+    $fallbackDate->modify('+10 days');
     return $fallbackDate->format('d/m/Y');
+}
+
+/**
+ * Helper method to parse date in multiple formats
+ */
+private function parseDate($dateStr)
+{
+    if (strpos($dateStr, '-') !== false) {
+        return new \DateTime($dateStr);
+    } elseif (strpos($dateStr, '/') !== false) {
+        $date = \DateTime::createFromFormat('d/m/Y', $dateStr);
+        if (!$date) {
+            $date = \DateTime::createFromFormat('m/d/Y', $dateStr);
+        }
+        return $date;
+    }
+    return null;
+}
+/**
+ * Convert HTML to plain text while preserving line breaks
+ */
+protected function htmlToPlainText($html)
+{
+    // Decode HTML entities
+    $html = html_entity_decode($html, ENT_QUOTES | ENT_HTML5, 'UTF-8');
+    
+    // Replace common block elements with newlines
+    $html = preg_replace('/<\/(div|p|tr|li|h[1-6])>/i', "\n", $html);
+    $html = preg_replace('/<br\s*\/?>/i', "\n", $html);
+    $html = preg_replace('/<\/(td|th)>/i', ' ', $html);
+    $html = str_replace('</td>', ' ', $html);
+    $html = str_replace('</tr>', "\n", $html);
+    
+    // Remove all HTML tags
+    $text = strip_tags($html);
+    
+    // Remove special Unicode characters (document icon, etc.)
+    $text = preg_replace('/[\x{2190}-\x{21FF}]/u', '', $text);
+    $text = preg_replace('/[\x{1F300}-\x{1F6FF}]/u', '', $text);
+    
+    // Remove non-printable characters but keep newlines
+    $text = preg_replace('/[^\x20-\x7E\x0A\x0D]/u', ' ', $text);
+    
+    // Normalize line endings
+    $text = str_replace(["\r\n", "\r"], "\n", $text);
+    
+    // Collapse multiple spaces
+    $text = preg_replace('/[ \t]+/', ' ', $text);
+    
+    // Remove lines that are just separators
+    $lines = explode("\n", $text);
+    $lines = array_map('trim', $lines);
+    $lines = array_filter($lines, function($line) {
+        return $line !== '' && !preg_match('/^[_\-\s]+$/', $line) && strlen($line) > 2;
+    });
+    
+    $result = implode("\n", $lines);
+    
+    Log::info("Cleaned text preview: " . substr($result, 0, 1000));
+    
+    return $result;
 }
     
     /**
@@ -531,7 +758,7 @@ protected function getInvoiceNumberWithRevision($baseNumber, $revisionNumber = n
                 <div class="staff">Auto Generated<br></div>
                 
                 <div class="footer">
-                    Cheques should be drawn in favour of APPLE HOLIDAYS and crossed A/C Payee Only<br>
+                  
                     This is a computer generated document no signature is required
                 </div>
             </div>
@@ -786,7 +1013,7 @@ protected function getInvoiceNumberWithRevision($baseNumber, $revisionNumber = n
     /**
      * Regenerate existing invoice with updated data and revision number
      */
-   public function regenerateInvoice($email, $existingInvoice, $revisionNumber = null, $gstNumber = null, $salesPerson = null)
+    public function regenerateInvoice($email, $existingInvoice, $revisionNumber = null, $gstNumber = null, $salesPerson = null)
     {
         // Get classification
         $agentClassifier = new AgentClassificationService();
@@ -797,17 +1024,30 @@ protected function getInvoiceNumberWithRevision($baseNumber, $revisionNumber = n
             $email->agent_name
         );
         
-        $revisionNumber = ($existingInvoice->revision_number ?? 0) + 1;
-        
-        // Generate new invoice number with revision (e.g., IS43595R3)
+        // ✅ Determine base number
         $baseNumber = $existingInvoice->original_invoice_number ?? $email->invoice_number;
-        $newInvoiceNumber = $baseNumber . 'R' . $revisionNumber;
+        $cleanBase = $this->cleanBaseNumber($baseNumber);
         
-        // Delete old PDF
-        $oldPath = storage_path("app/public/{$existingInvoice->file_path}");
-        if (file_exists($oldPath)) {
-            unlink($oldPath);
-        }
+        // ✅ Get all existing invoices for this base
+        $existingInvoices = GeneratedInvoice::where('original_invoice_number', $cleanBase)
+            ->orWhere('invoice_number', 'LIKE', $cleanBase . '%')
+            ->orderBy('id', 'asc')
+            ->get();
+        
+        $totalCount = $existingInvoices->count();
+        $newTotal = $totalCount + 1;
+        $newRevisionNumber = $newTotal;
+        
+        // ✅ DISPLAY format: IS48329_R2/R2
+        $displayInvoiceNumber = $cleanBase . '_R' . $newRevisionNumber . '/R' . $newTotal;
+        
+        // ✅ FILE format: IS48329_R2_R2
+        $fileInvoiceNumber = $cleanBase . '_R' . $newRevisionNumber . '_R' . $newTotal;
+        
+        Log::info("🔄 Generating revision: Display: {$displayInvoiceNumber}, File: {$fileInvoiceNumber}");
+        
+        // ✅ UPDATE all previous invoices with new total
+        $this->updatePreviousRevisions($cleanBase, $newTotal);
         
         // Get dynamic values from email
         $totalUSD = $email->total_amount ?? 0;
@@ -865,27 +1105,22 @@ protected function getInvoiceNumberWithRevision($baseNumber, $revisionNumber = n
                 'sales_person' => $salesPerson,
             ];
         }
-          $gstNumber = null;
-    if ($email->agent_name) {
-        $agentName = trim($email->agent_name);
         
-        $agentGst = AgentGst::whereRaw('LOWER(agent_name) = LOWER(?)', [$agentName])->first();
-        
-        if (!$agentGst) {
-            $searchName = preg_replace('/\s+(AGENT|TRAVEL|TOURS|PVT|LTD|PRIVATE|LIMITED|LLP|HOLIDAYS|INTERNATIONAL|SOLUTIONS)/i', '', $agentName);
-            $searchName = trim($searchName);
-            $agentGst = AgentGst::whereRaw('LOWER(agent_name) LIKE ?', ['%' . strtolower($searchName) . '%'])->first();
+        // ✅ Auto-fetch GST if not provided
+        if (!$gstNumber && $email->agent_name) {
+            $agentGst = AgentGst::where('agent_name', 'LIKE', '%' . $email->agent_name . '%')->first();
+            if ($agentGst) {
+                $gstNumber = $agentGst->gst_number;
+            }
         }
         
-        if ($agentGst) {
-            $gstNumber = $agentGst->gst_number;
-        }
-    }
-    
-     $salesPerson = $email->sales_person ?? null;
-        // Update existing invoice record with new revision
-        $existingInvoice->update([
-            'invoice_number' => $newInvoiceNumber,
+        $salesPerson = $salesPerson ?? $email->sales_person ?? null;
+        
+        // ✅ CREATE NEW INVOICE RECORD with DISPLAY format
+        $newInvoice = GeneratedInvoice::create([
+            'email_id' => $email->id,
+            'invoice_number' => $displayInvoiceNumber,  // ← IS48329_R2/R2
+            'invoice_date' => now()->format('Y-m-d'),
             'customer_name' => $email->agent_name ?? ($email->guest_name ?? 'Unknown Customer'),
             'guest_name' => $email->guest_name,
             'tour_ref' => $email->tour_ref,
@@ -895,149 +1130,287 @@ protected function getInvoiceNumberWithRevision($baseNumber, $revisionNumber = n
             'currency' => $currency,
             'invoice_type' => $classification['credit_type'],
             'status' => 'draft',
+            'file_path' => null,
             'calculations' => $calculations ? json_encode($calculations) : null,
-            'revision_number' => $revisionNumber,
+            'revision_number' => $newRevisionNumber,
+            'total_revisions' => $newTotal,
             'is_revision' => true,
-            'updated_at' => now(),
-            'gst_number' => $gstNumber ?? $existingInvoice->gst_number,
-        'sales_person' => $salesPerson ?? $existingInvoice->sales_person,
+            'original_invoice_number' => $cleanBase,
+            'gst_number' => $gstNumber,
+            'sales_person' => $salesPerson,
         ]);
         
-        // Generate PDF based on invoice format
+        // ✅ Generate PDF with FILE format (underscore)
         if ($invoiceFormat == 'apple_holidays') {
-            $html = $this->generateAppleHolidaysInvoiceHTML($existingInvoice, $email);
+            $html = $this->generateAppleHolidaysInvoiceHTML($newInvoice, $email);
         } else {
-            $html = $this->generateSharmilaInvoiceHTML($existingInvoice, $email, $calculations);
+            $html = $this->generateSharmilaInvoiceHTML($newInvoice, $email, $calculations);
         }
         
         $pdf = Pdf::loadHTML($html);
-        $filename = "invoices/{$newInvoiceNumber}.pdf";
+        $filename = "invoices/{$fileInvoiceNumber}.pdf";
         $pdf->save(storage_path("app/public/{$filename}"));
         
-        $existingInvoice->file_path = $filename;
-        $existingInvoice->save();
+        $newInvoice->file_path = $filename;
+        $newInvoice->save();
         
-        return $existingInvoice;
+        Log::info("✅ Created revision invoice: {$displayInvoiceNumber}");
+          $this->sendInvoiceEmail($newInvoice);
+        return $newInvoice;
     }
+
     /**
  * Generate a NEW revision invoice (creates new record, doesn't update existing)
  */
-public function generateRevisionFromEmail($email, $classification, $newInvoiceNumber, $revisionNumber, $originalBaseNumber)
-{
-    // Create directory
-    $directory = storage_path('app/public/invoices');
-    if (!File::exists($directory)) {
-        File::makeDirectory($directory, 0755, true);
-    }
-    
-    // Get dynamic values from email
-    $totalUSD = $email->total_amount ?? 0;
-    $totalGuests = (int)($email->number_of_guests ?? $email->pax_count ?? 1);
-    if ($totalGuests < 1) {
-        $totalGuests = 1;
-    }
-    
-    $exchangeRate = $email->exchange_rate ?? $this->getExchangeRate();
-    $handlingFeePerPersonUSD = 5;
-    
-    $hasHandlingFee = $classification['has_handling_fee'] ?? false;
-    $invoiceFormat = $classification['invoice_format'] ?? 'apple_holidays';
-    $currency = $classification['currency'] ?? 'USD';
-    
-    // Auto-fetch GST from agent
-    $gstNumber = null;
-    if ($email->agent_name) {
-        $agentGst = AgentGst::where('agent_name', 'LIKE', '%' . $email->agent_name . '%')->first();
-        if ($agentGst) {
-            $gstNumber = $agentGst->gst_number;
+  public function generateRevisionFromEmail($email, $classification, $newInvoiceNumber, $revisionNumber, $originalBaseNumber)
+    {
+        // ✅ First, update previous revisions with new total
+        $cleanBase = $this->cleanBaseNumber($originalBaseNumber);
+        
+        // Get all existing invoices for this base
+        $existingInvoices = GeneratedInvoice::where('original_invoice_number', $cleanBase)
+            ->orWhere('invoice_number', 'LIKE', $cleanBase . '%')
+            ->orderBy('id', 'asc')
+            ->get();
+        
+        $totalCount = $existingInvoices->count();
+        $newTotal = $totalCount + 1;
+        
+        // ✅ Update previous revisions
+        $this->updatePreviousRevisions($cleanBase, $newTotal);
+        
+        // Create directory
+        $directory = storage_path('app/public/invoices');
+        if (!File::exists($directory)) {
+            File::makeDirectory($directory, 0755, true);
         }
-    }
-    
-    $salesPerson = $email->sales_person ?? null;
-    
-    if (!$hasHandlingFee) {
-        $handlingFee = 0;
-        $grandTotal = $totalUSD;
-        $currency = 'USD';
-        $calculations = null;
-    } else {
-        $perPersonUSD = $totalUSD / $totalGuests;
-        $netPerPersonUSD = $perPersonUSD - $handlingFeePerPersonUSD;
-        $netPerPersonINR = $netPerPersonUSD * $exchangeRate;
-        $totalTourCostINR = $netPerPersonINR * $totalGuests;
-        $handlingFeePerPersonINR = $handlingFeePerPersonUSD * $exchangeRate;
-        $totalHandlingFeeINR = $handlingFeePerPersonINR * $totalGuests;
-        $subTotalINR = $totalTourCostINR + $totalHandlingFeeINR;
         
-        $cgstPercent = $email->cgst_percent ?? 9;
-        $sgstPercent = $email->sgst_percent ?? 9;
-        $cgst = $totalHandlingFeeINR * ($cgstPercent / 100);
-        $sgst = $totalHandlingFeeINR * ($sgstPercent / 100);
-        $finalGrandTotal = $subTotalINR + $cgst + $sgst;
+        // Get dynamic values from email
+        $totalUSD = $email->total_amount ?? 0;
+        $totalGuests = (int)($email->number_of_guests ?? $email->pax_count ?? 1);
+        if ($totalGuests < 1) {
+            $totalGuests = 1;
+        }
         
-        $handlingFee = $totalHandlingFeeINR;
-        $grandTotal = $finalGrandTotal;
-        $currency = 'INR';
+        $exchangeRate = $email->exchange_rate ?? $this->getExchangeRate();
+        $handlingFeePerPersonUSD = 5;
         
-        $calculations = [
-            'original_usd' => $totalUSD,
-            'total_guests' => $totalGuests,
-            'per_person_usd' => $perPersonUSD,
-            'handling_fee_per_person_usd' => $handlingFeePerPersonUSD,
-            'net_per_person_usd' => $netPerPersonUSD,
-            'exchange_rate' => $exchangeRate,
-            'net_per_person_inr' => $netPerPersonINR,
-            'handling_fee_per_person_inr' => $handlingFeePerPersonINR,
-            'total_tour_cost_inr' => $totalTourCostINR,
-            'total_handling_fee_inr' => $totalHandlingFeeINR,
-            'sub_total_inr' => $subTotalINR,
-            'cgst_percent' => $cgstPercent,
-            'cgst_amount' => $cgst,
-            'sgst_percent' => $sgstPercent,
-            'sgst_amount' => $sgst,
-            'final_total_inr' => $finalGrandTotal,
+        $hasHandlingFee = $classification['has_handling_fee'] ?? false;
+        $invoiceFormat = $classification['invoice_format'] ?? 'apple_holidays';
+        $currency = $classification['currency'] ?? 'USD';
+        
+        // Auto-fetch GST from agent
+        $gstNumber = null;
+        if ($email->agent_name) {
+            $agentGst = AgentGst::where('agent_name', 'LIKE', '%' . $email->agent_name . '%')->first();
+            if ($agentGst) {
+                $gstNumber = $agentGst->gst_number;
+            }
+        }
+        
+        $salesPerson = $email->sales_person ?? null;
+        
+        if (!$hasHandlingFee) {
+            $handlingFee = 0;
+            $grandTotal = $totalUSD;
+            $currency = 'USD';
+            $calculations = null;
+        } else {
+            $perPersonUSD = $totalUSD / $totalGuests;
+            $netPerPersonUSD = $perPersonUSD - $handlingFeePerPersonUSD;
+            $netPerPersonINR = $netPerPersonUSD * $exchangeRate;
+            $totalTourCostINR = $netPerPersonINR * $totalGuests;
+            $handlingFeePerPersonINR = $handlingFeePerPersonUSD * $exchangeRate;
+            $totalHandlingFeeINR = $handlingFeePerPersonINR * $totalGuests;
+            $subTotalINR = $totalTourCostINR + $totalHandlingFeeINR;
+            
+            $cgstPercent = $email->cgst_percent ?? 9;
+            $sgstPercent = $email->sgst_percent ?? 9;
+            $cgst = $totalHandlingFeeINR * ($cgstPercent / 100);
+            $sgst = $totalHandlingFeeINR * ($sgstPercent / 100);
+            $finalGrandTotal = $subTotalINR + $cgst + $sgst;
+            
+            $handlingFee = $totalHandlingFeeINR;
+            $grandTotal = $finalGrandTotal;
+            $currency = 'INR';
+            
+            $calculations = [
+                'original_usd' => $totalUSD,
+                'total_guests' => $totalGuests,
+                'per_person_usd' => $perPersonUSD,
+                'handling_fee_per_person_usd' => $handlingFeePerPersonUSD,
+                'net_per_person_usd' => $netPerPersonUSD,
+                'exchange_rate' => $exchangeRate,
+                'net_per_person_inr' => $netPerPersonINR,
+                'handling_fee_per_person_inr' => $handlingFeePerPersonINR,
+                'total_tour_cost_inr' => $totalTourCostINR,
+                'total_handling_fee_inr' => $totalHandlingFeeINR,
+                'sub_total_inr' => $subTotalINR,
+                'cgst_percent' => $cgstPercent,
+                'cgst_amount' => $cgst,
+                'sgst_percent' => $sgstPercent,
+                'sgst_amount' => $sgst,
+                'final_total_inr' => $finalGrandTotal,
+                'gst_number' => $gstNumber,
+                'sales_person' => $salesPerson,
+            ];
+        }
+        
+        // ✅ Create NEW invoice record with updated total
+        $invoice = GeneratedInvoice::create([
+            'email_id' => $email->id,
+            'invoice_number' => $newInvoiceNumber,
+            'invoice_date' => now()->format('Y-m-d'),
+            'customer_name' => $email->agent_name ?? ($email->guest_name ?? 'Unknown Customer'),
+            'guest_name' => $email->guest_name,
+            'tour_ref' => $email->tour_ref,
+            'total_amount' => $totalUSD,
+            'handling_fee' => $handlingFee,
+            'grand_total' => $grandTotal,
+            'currency' => $currency,
+            'invoice_type' => $classification['credit_type'],
+            'status' => 'draft',
+            'file_path' => null,
+            'calculations' => $calculations ? json_encode($calculations) : null,
+            'revision_number' => $revisionNumber,
+            'total_revisions' => $newTotal,  // ✅ Updated total
+            'is_revision' => true,
+            'original_invoice_number' => $cleanBase,
             'gst_number' => $gstNumber,
             'sales_person' => $salesPerson,
-        ];
+        ]);
+        
+        // Generate PDF
+        if ($invoiceFormat == 'apple_holidays') {
+            $html = $this->generateAppleHolidaysInvoiceHTML($invoice, $email);
+        } else {
+            $html = $this->generateSharmilaInvoiceHTML($invoice, $email, $calculations);
+        }
+        
+        $pdf = Pdf::loadHTML($html);
+        $filename = "invoices/{$invoice->invoice_number}.pdf";
+        $pdf->save(storage_path("app/public/{$filename}"));
+        
+        $invoice->file_path = $filename;
+        $invoice->save();
+        
+        Log::info("✅ Created revision invoice: {$newInvoiceNumber} (Revision {$revisionNumber} of {$newTotal})");
+        $this->sendInvoiceEmail($invoice);
+        return $invoice;
+    }
+
+protected function autoGenerateInvoice($email)
+{
+    try {
+        if (GeneratedInvoice::where('email_id', $email->id)->exists()) {
+            return;
+        }
+        
+        if ($email->tour_ref == 'NA' || $email->invoice_number == 'NA') {
+            return;
+        }
+        
+        $invoiceService = app(InvoiceGenerationService::class);
+        $invoice = $invoiceService->generateFromEmail($email);
+        
+        if ($invoice) {
+            Log::info("✅ Auto-generated invoice: " . $invoice->invoice_number);
+            
+            // ✅✅✅ ADD THIS LINE ✅✅✅
+            $this->sendInvoiceEmail($invoice);
+            
+        }
+        
+    } catch (\Exception $e) {
+        Log::error('❌ Auto-generate invoice failed: ' . $e->getMessage());
+    }
+}
+
+/**
+ * ✅ Send Invoice Email
+ */
+protected function sendInvoiceEmail($invoice)
+{
+    try {
+        // Determine email type
+        $emailType = 'credit';
+        
+        if ($invoice->is_revision) {
+            $emailType = 'revision';
+        } elseif ($invoice->invoice_type == 'non_credit') {
+            $emailType = 'non_credit';
+        }
+        
+        // Send email
+        Mail::to('kevinraj@aahaas.com')
+            ->cc('raja.lakshmi@aahaas.com')
+            ->send(new InvoiceMail($invoice, $emailType));
+        
+        Log::info("📧 Invoice email sent for: " . $invoice->invoice_number);
+        
+    } catch (\Exception $e) {
+        Log::error('❌ Failed to send invoice email: ' . $e->getMessage());
+    }
+}
+
+/**
+ * ✅ Detect currency from email body
+ */
+protected function detectCurrency($plainText)
+{
+    // Check for Singapore Dollar
+    if (preg_match('/S\$\s*([0-9,]+\.?[0-9]*)/', $plainText, $match) || 
+        stripos($plainText, 'SGD') !== false || 
+        stripos($plainText, 'Singapore') !== false) {
+        return 'SGD';
     }
     
-    // Create NEW invoice record (NOT update existing)
-    $invoice = GeneratedInvoice::create([
-        'email_id' => $email->id,
-        'invoice_number' => $newInvoiceNumber,
-        'invoice_date' => now()->format('Y-m-d'),
-        'customer_name' => $email->agent_name ?? ($email->guest_name ?? 'Unknown Customer'),
-        'guest_name' => $email->guest_name,
-        'tour_ref' => $email->tour_ref,
-        'total_amount' => $totalUSD,
-        'handling_fee' => $handlingFee,
-        'grand_total' => $grandTotal,
-        'currency' => $currency,
-        'invoice_type' => $classification['credit_type'],
-        'status' => 'draft',
-        'file_path' => null,
-        'calculations' => $calculations ? json_encode($calculations) : null,
-        'revision_number' => $revisionNumber,
-        'is_revision' => true,
-        'original_invoice_number' => $originalBaseNumber,
-        'gst_number' => $gstNumber,
-        'sales_person' => $salesPerson,
-    ]);
-    
-    // Generate PDF
-    if ($invoiceFormat == 'apple_holidays') {
-        $html = $this->generateAppleHolidaysInvoiceHTML($invoice, $email);
-    } else {
-        $html = $this->generateSharmilaInvoiceHTML($invoice, $email, $calculations);
+    // Check for Malaysian Ringgit
+    if (preg_match('/RM\s*([0-9,]+\.?[0-9]*)/', $plainText, $match) || 
+        stripos($plainText, 'MYR') !== false || 
+        stripos($plainText, 'Ringgit') !== false) {
+        return 'MYR';
     }
     
-    $pdf = Pdf::loadHTML($html);
-    $filename = "invoices/{$invoice->invoice_number}.pdf";
-    $pdf->save(storage_path("app/public/{$filename}"));
+    // Check for USD
+    if (preg_match('/\$\s*([0-9,]+\.?[0-9]*)/', $plainText, $match) || 
+        stripos($plainText, 'USD') !== false) {
+        return 'USD';
+    }
     
-    $invoice->file_path = $filename;
-    $invoice->save();
+    // Check for INR
+    if (stripos($plainText, 'INR') !== false || 
+        stripos($plainText, '₹') !== false) {
+        return 'INR';
+    }
     
-    return $invoice;
+    return 'USD'; // Default
+}
+
+/**
+ * ✅ Convert amount to INR based on currency
+ */
+protected function convertToINR($amount, $currency)
+{
+    if ($currency == 'INR') {
+        return $amount;
+    }
+    
+    $exchangeService = new ExchangeRateService();
+    
+    switch ($currency) {
+        case 'SGD':
+            $rate = $exchangeService->getSgdToInrRate();
+            break;
+        case 'MYR':
+            $rate = $exchangeService->getMyrToInrRate();
+            break;
+        case 'USD':
+        default:
+            $rate = $exchangeService->getUsdToInrRate();
+            break;
+    }
+    
+    return $amount * $rate;
 }
 }
