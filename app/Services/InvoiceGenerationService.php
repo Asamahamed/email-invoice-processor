@@ -110,7 +110,7 @@ class InvoiceGenerationService
                 'sgst_amount' => $sgst,
                 'final_total_inr' => $finalGrandTotal,
                 'gst_number' => $gstNumber,
-'sales_person' => $salesPerson,
+                'sales_person' => $salesPerson,
             ];
         }
         
@@ -346,7 +346,7 @@ protected function getInvoiceNumberWithRevision($baseNumber, $revisionNumber = n
                     background: white;
                 }
                 .logo { text-align: center; margin-bottom: 10px; }
-                .logo img { max-width: 180px; height: auto; }
+                .logo img { max-width: 300px; height: auto; }
                 .header-address {
                     text-align: center;
                     margin-bottom: 15px;
@@ -447,7 +447,7 @@ protected function getInvoiceNumberWithRevision($baseNumber, $revisionNumber = n
                 
                 <div class="header-address">
                     #2207 - #2208, One Galle Face Tower, 1A Center Road, Colombo 02, Sri Lanka<br>
-                    Tel: +94-11-2353400 Fax: +94-11-7423707 email: accounts@aahaas.com
+                    Tel: +94-11-2353400 email: accounts@aahaas.com
                 </div>
                 
                 ' . $revisionNote . '
@@ -478,17 +478,27 @@ protected function getInvoiceNumberWithRevision($baseNumber, $revisionNumber = n
         <td class="label">Sales Person:</td><td>' . ($invoice->sales_person ?: 'NA') . '</td>
     </tr>
 </table>
-                <table class="items-table">
-                    <thead><tr><th>Description</th><th>UNIT FARE</th><th>DISCount %</th><th>Quantity</th><th class="amount">AMOUNT</th></tr></thead>
-                    <tbody>
-                        ' . ($totalGuests > 1 ? '
-                        <tr><td>Cost Per Person</td><td>$' . number_format($perPersonAmount, 2) . '</td><td>0</td><td>' . $totalGuests . '</td><td class="amount">$' . number_format($totalAmount, 2) . '</td></tr>
-                        <tr><td>Total Tour cost</td><td>$' . number_format($totalAmount, 2) . '</td><td>0</td><td>1</td><td class="amount">$' . number_format($totalAmount, 2) . '</td></tr>
-                        ' : '
-                        <tr><td>Total Tour cost</td><td>$' . number_format($totalAmount, 2) . '</td><td>0</td><td>1</td><td class="amount">$' . number_format($totalAmount, 2) . '</td></tr>
-                        ') . '
-                    </tbody>
-                </table>
+              <table class="items-table">
+    <thead><tr><th>Description</th><th>UNIT FARE</th><th>DISCount %</th><th>Quantity</th><th class="amount">AMOUNT</th></tr></thead>
+    <tbody>
+        <!-- Cost Per Person row - shows all columns -->
+        <tr>
+            <td>Cost Per Person</td>
+            <td>$' . number_format($perPersonAmount, 2) . '</td>
+            <td>0</td>
+            <td>' . $totalGuests . '</td>
+            <td class="amount">$' . number_format($totalAmount, 2) . '</td>
+        </tr>
+        <!-- Total Tour cost row - ONLY Description and AMOUNT -->
+        <tr>
+            <td><strong>Total Tour cost</strong></td>
+            <td></td>
+            <td></td>
+            <td></td>
+            <td class="amount"><strong>$' . number_format($totalAmount, 2) . '</strong></td>
+        </tr>
+    </tbody>
+</table>
                 
                 <div class="total-section">
                     <table class="total-table" style="width:300px; margin-left:auto;">
@@ -668,7 +678,7 @@ protected function getInvoiceNumberWithRevision($baseNumber, $revisionNumber = n
                         Shop No : 1st Floor, 10, Venkatraman Road, Kamala Second Street, Chinna Chokkikulam, Madurai - 625002
                     </div>
                     <div class="company-details">
-                        Tel : +91 0452 405 8375 / 4054704 | Email : Chennai@Sharmilatravels.com<br>
+                        Tel : +91 95852 29262 | Email : accounts@aahaas.com<br>
                         Services Tax : ADVF4429D | GSTIN : 33ADVFS4429D1ZV
                     </div>
                 </div>
@@ -743,11 +753,9 @@ protected function getInvoiceNumberWithRevision($baseNumber, $revisionNumber = n
                     Xe: ' . number_format($exchangeRate - 1, 2) . ' (+1) = ' . $exchangeRate . '
                 </div>
                 
-                <div class="warning-text">
-                    <strong>Important Notes:</strong><br>
-                    • <strong>Cash Deposit Instructions:</strong> Please do not deposit the full amount in a single transaction into our account. Instead, kindly make part payments at regular intervals to avoid attracting Tax Collected at Source (TCS), which is applicable on cash deposits exceeding ₹49,000.<br>
-                    • <strong>QR Code Payment Delivery:</strong> While making payments via QR code, please avoid using credit cards. If a credit card is used, Transaction Disbursement Rate (TDR) charges will be applicable.
-                </div>
+               <div style="background: #fff3cd; padding: 6px 10px; margin: 8px 0; border-left: 4px solid #ffc107; font-size: 7pt; line-height: 1.4;">
+    <strong>Note:</strong> Cash deposit should not exceed ₹49,000 per transaction.
+</div>
                 
                 <div class="footer">
                     This is a computer generated document - no signature required
@@ -793,7 +801,7 @@ protected function getInvoiceNumberWithRevision($baseNumber, $revisionNumber = n
         
         // Generate new invoice number with revision (e.g., IS43595R3)
         $baseNumber = $existingInvoice->original_invoice_number ?? $email->invoice_number;
-    $newInvoiceNumber = $baseNumber . 'R' . $revisionNumber;
+        $newInvoiceNumber = $baseNumber . 'R' . $revisionNumber;
         
         // Delete old PDF
         $oldPath = storage_path("app/public/{$existingInvoice->file_path}");
@@ -854,7 +862,7 @@ protected function getInvoiceNumberWithRevision($baseNumber, $revisionNumber = n
                 'sgst_amount' => $sgst,
                 'final_total_inr' => $finalGrandTotal,
                 'gst_number' => $gstNumber,
-'sales_person' => $salesPerson,
+                'sales_person' => $salesPerson,
             ];
         }
           $gstNumber = null;

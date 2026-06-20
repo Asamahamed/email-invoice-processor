@@ -266,28 +266,27 @@
                                             <span class="badge-pending">Pending</span>
                                         @endif
                                     </td>
-                                    <td onclick="event.stopPropagation()">
-                                        <div class="action-buttons">
-                                            @if (!$email->invoice)
-                                                <button type="button" class="btn btn-primary btn-sm generate-invoice-btn"
-                                                    data-email-id="{{ $email->id }}"
-                                                    onclick="generateAndViewInvoice(this)">
-                                                    <i class="fas fa-file-invoice"></i> Generate
-                                                </button>
-                                            @else
-                                                <a href="{{ route('invoice.view', $email->invoice->id) }}"
-                                                    class="btn btn-success btn-sm" target="_blank">
-                                                    <i class="fas fa-eye"></i> View
-                                                </a>
-                                                <a href="{{ route('invoice.download', $email->invoice->id) }}"
-                                                    class="btn btn-secondary btn-sm">
-                                                    <i class="fas fa-download"></i>
-                                                </a>
-                                                {{-- Remove this Revise button --}}
-                                                {{-- <button type="button" class="btn btn-warning btn-sm regenerate-invoice-btn" ...> --}}
-                                            @endif
-                                        </div>
-                                    </td>
+                                   <td onclick="event.stopPropagation()">
+    <div class="action-buttons">
+        @if ($email->invoice)
+            <!-- View Invoice -->
+            <a href="{{ route('invoice.view', $email->invoice->id) }}"
+                class="btn btn-success btn-sm" target="_blank" title="View Invoice">
+                <i class="fas fa-eye"></i>
+            </a>
+            <!-- Download Invoice -->
+            <a href="{{ route('invoice.download', $email->invoice->id) }}"
+                class="btn btn-secondary btn-sm" title="Download Invoice">
+                <i class="fas fa-download"></i>
+            </a>
+        @else
+            <!-- No invoice yet - show waiting status -->
+            <span class="badge bg-warning text-dark" title="Invoice will be generated automatically">
+                <i class="fas fa-clock me-1"></i> Processing
+            </span>
+        @endif
+    </div>
+</td>
                                 </tr>
                             @empty
                                 <tr>
@@ -348,9 +347,9 @@
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
-                    <button type="button" class="btn btn-primary" id="modalGenerateBtn">
+                    {{-- <button type="button" class="btn btn-primary" id="modalGenerateBtn">
                         <i class="fas fa-file-invoice me-1"></i> Generate Invoice
-                    </button>
+                    </button> --}}
                 </div>
             </div>
         </div>
