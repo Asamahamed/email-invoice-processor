@@ -9,14 +9,14 @@ return new class extends Migration
     public function up()
     {
         Schema::table('pnl_records', function (Blueprint $table) {
-            $table->string('agent_name', 255)->change();
+            $table->string('agent_name', 255)->nullable()->change();
         });
     }
 
     public function down()
     {
         Schema::table('pnl_records', function (Blueprint $table) {
-            $table->string('agent_name', 255)->change();
+            $table->string('agent_name', 255)->nullable()->change();
         });
     }
 };
