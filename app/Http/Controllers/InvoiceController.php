@@ -11,12 +11,17 @@ use Illuminate\Validation\ValidationException;
 use Illuminate\Support\Facades\Log;
 use App\Mail\InvoiceMail;
 use Illuminate\Support\Facades\Mail;
+use App\Services\AgentClassificationService;
+use Barryvdh\DomPDF\Facade\Pdf;
+
 
 class InvoiceController extends Controller
 {
     public function index(Request $request)
     {
-        $query = IncomingEmail::with('invoice')->latest('received_at');
+       $query = IncomingEmail::with('invoice')
+        ->orderBy('received_at', 'desc')  // ✅ NEWEST FIRST for display
+        ->latest('received_at');
         
         // Apply filters
         if ($request->filled('search')) {
@@ -276,11 +281,13 @@ public function viewInvoice($id)
                     }
                     
                     // Send email with attachment
-                    Mail::to('kevinraj@aahaas.com')
-                        ->cc('raja.lakshmi@aahaas.com')
-                        ->send(new InvoiceMail($invoice, $emailType));
-                    
-                    Log::info("📧 Invoice email sent for: " . $invoice->invoice_number);
+                   
+                Mail::to('kevinraj@aahaas.com')
+                    ->cc('raja.lakshmi@aahaas.com')
+                    ->send(new InvoiceMail($invoice, $emailType));
+                
+                Log::info("📧 Invoice email sent for: " . $invoice->invoice_number);
+                
                 } catch (\Exception $e) {
                     Log::error('❌ Email send failed: ' . $e->getMessage());
                 }

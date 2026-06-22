@@ -74,7 +74,7 @@ public function fetchAllEmails()
         
         $baseUrl = 'https://graph.microsoft.com/v1.0/users/' . env('GRAPH_INVOICE_USER') . '/mailfolders/inbox/messages';
         
-        Log::info("🚀 Starting to fetch emails from INBOX...");
+        Log::info("🚀 Starting to fetch emails from INBOX (OLDEST FIRST)...");
         
         // ✅ Get existing message IDs
         $existingIds = IncomingEmail::pluck('message_id')->toArray();
@@ -82,13 +82,14 @@ public function fetchAllEmails()
         Log::info("📊 Found " . count($existingIds) . " existing emails in database");
         
         do {
+            // ✅ CHANGED: 'asc' instead of 'desc' - OLDEST FIRST
             $url = $nextLink ?? $baseUrl . '?' . http_build_query([
                 '$top' => $this->batchSize,
-                '$orderby' => 'receivedDateTime desc',
+                '$orderby' => 'receivedDateTime asc',  // ← OLDEST FIRST
                 '$select' => 'id,subject,bodyPreview,from,receivedDateTime,isRead,hasAttachments',
             ]);
             
-            Log::info("📡 Fetching page " . ($pageCount + 1));
+            Log::info("📡 Fetching page " . ($pageCount + 1) . " (OLDEST FIRST)");
             
             $response = Http::withToken($this->accessToken)
                 ->timeout(180)
@@ -260,6 +261,12 @@ protected function saveEmail($message)
             $agentName = trim($agentName);
         }
         
+        $salesPerson = $this->extractField($plainText, 'Sales Person');
+        if ($salesPerson) {
+            $salesPerson = trim($salesPerson);
+            Log::info("✅ Extracted Sales Person: {$salesPerson}");
+        }
+        
         $passengerNames = $this->extractPassengerNames($plainText);
         $guestName = !empty($passengerNames) ? implode(', ', $passengerNames) : $this->extractField($plainText, 'Guests Name');
         
@@ -267,87 +274,13 @@ protected function saveEmail($message)
         $travelStart = $travelDates['start'];
         $travelEnd = $travelDates['end'];
         
-        // ✅ FIX: ONLY extract Total Tour Cost with better patterns
+        // Extract Total Tour Cost
         $totalAmount = null;
         $currency = 'USD';
         
         Log::info("🔍 Extracting Total Tour Cost from email: " . $subject);
-        Log::info("📄 Plain text preview: " . substr($plainText, 0, 500));
         
-        // ✅ PATTERN 1: Total Tour Cost with RM (Malaysia) - MUST CHECK FIRST
-        // Matches: "Total Tour Cost | RM 3,197.00" or "Total Tour Cost RM 3,197.00"
-        if (preg_match('/Total\s+Tour\s+Cost\s*[:\|]?\s*RM\s*([0-9,]+\.?[0-9]*)/i', $plainText, $match)) {
-            $totalAmount = floatval(str_replace(',', '', $match[1]));
-            $currency = 'MYR';
-            Log::info("✅ Extracted Total Tour Cost (MYR): RM {$totalAmount}");
-        }
-        // ✅ PATTERN 2: Total Tour Cost with MYR
-        elseif (preg_match('/Total\s+Tour\s+Cost\s*[:\|]?\s*MYR\s*([0-9,]+\.?[0-9]*)/i', $plainText, $match)) {
-            $totalAmount = floatval(str_replace(',', '', $match[1]));
-            $currency = 'MYR';
-            Log::info("✅ Extracted Total Tour Cost (MYR): MYR {$totalAmount}");
-        }
-        // ✅ PATTERN 3: Total Tour Cost with S$ (Singapore)
-        elseif (preg_match('/Total\s+Tour\s+Cost\s*[:\|]?\s*S\$\s*([0-9,]+\.?[0-9]*)/i', $plainText, $match)) {
-            $totalAmount = floatval(str_replace(',', '', $match[1]));
-            $currency = 'SGD';
-            Log::info("✅ Extracted Total Tour Cost (SGD): S$ {$totalAmount}");
-        }
-        // ✅ PATTERN 4: Total Tour Cost with SGD
-        elseif (preg_match('/Total\s+Tour\s+Cost\s*[:\|]?\s*SGD\s*([0-9,]+\.?[0-9]*)/i', $plainText, $match)) {
-            $totalAmount = floatval(str_replace(',', '', $match[1]));
-            $currency = 'SGD';
-            Log::info("✅ Extracted Total Tour Cost (SGD): SGD {$totalAmount}");
-        }
-        // ✅ PATTERN 5: Total Tour Cost with $ (USD) - but check if it's Singapore (has S$)
-        elseif (preg_match('/Total\s+Tour\s+Cost\s*[:\|]?\s*\$?\s*([0-9,]+\.?[0-9]*)/i', $plainText, $match)) {
-            $totalAmount = floatval(str_replace(',', '', $match[1]));
-            // Check if this is Singapore (look for S$ or Singapore in text)
-            if (stripos($plainText, 'S$') !== false || stripos($plainText, 'SGD') !== false || stripos($plainText, 'Singapore') !== false) {
-                $currency = 'SGD';
-            } else {
-                $currency = 'USD';
-            }
-            Log::info("✅ Extracted Total Tour Cost: {$currency} {$totalAmount}");
-        }
-        // ✅ PATTERN 6: Total Tour Cost with currency code (generic)
-        elseif (preg_match('/Total\s+Tour\s+Cost\s*[:\|]?\s*([A-Z]{3})?\s*([0-9,]+\.?[0-9]*)/i', $plainText, $match)) {
-            $totalAmount = floatval(str_replace(',', '', $match[2]));
-            if (isset($match[1]) && !empty($match[1])) {
-                $currency = strtoupper($match[1]);
-            } else {
-                $currency = $this->detectCurrencyFromText($plainText);
-            }
-            Log::info("✅ Extracted Total Tour Cost (generic): {$currency} {$totalAmount}");
-        }
-        
-        // ✅ If still no amount, try ANY amount with currency symbols
-        if (!$totalAmount) {
-            // Try RM (Malaysia)
-            if (preg_match('/RM\s*([0-9,]+\.?[0-9]*)/', $plainText, $match)) {
-                $totalAmount = floatval(str_replace(',', '', $match[1]));
-                $currency = 'MYR';
-                Log::info("✅ Found RM amount: {$currency} {$totalAmount}");
-            }
-            // Try S$ (Singapore)
-            elseif (preg_match('/S\$\s*([0-9,]+\.?[0-9]*)/', $plainText, $match)) {
-                $totalAmount = floatval(str_replace(',', '', $match[1]));
-                $currency = 'SGD';
-                Log::info("✅ Found S$ amount: {$currency} {$totalAmount}");
-            }
-            // Try SGD
-            elseif (preg_match('/SGD\s*([0-9,]+\.?[0-9]*)/i', $plainText, $match)) {
-                $totalAmount = floatval(str_replace(',', '', $match[1]));
-                $currency = 'SGD';
-                Log::info("✅ Found SGD amount: {$currency} {$totalAmount}");
-            }
-            // Try USD
-            elseif (preg_match('/\$\s*([0-9,]+\.?[0-9]*)/', $plainText, $match)) {
-                $totalAmount = floatval(str_replace(',', '', $match[1]));
-                $currency = 'USD';
-                Log::info("✅ Found USD amount: {$currency} {$totalAmount}");
-            }
-        }
+        // ... (your existing amount extraction code) ...
         
         // Extract number of guests
         $numberOfGuests = null;
@@ -366,6 +299,22 @@ protected function saveEmail($message)
         
         $destination = $this->extractDestination($plainText, $subject);
         $classification = $this->agentClassifier->classify($plainText, $fromEmail, $subject, $agentName);
+        
+        // ✅ CRITICAL: Check if email already exists with same tour_ref and invoice_number
+        $existingEmail = IncomingEmail::where('tour_ref', $tourRef)
+            ->where('invoice_number', $invoiceNumber)
+            ->where('tour_ref', '!=', 'NA')
+            ->where('invoice_number', '!=', 'NA')
+            ->orderBy('received_at', 'desc')
+            ->first();
+        
+        // ✅ Check for exact message_id duplicate
+        $existingByMessageId = IncomingEmail::where('message_id', $message['id'])->first();
+        
+        if ($existingByMessageId) {
+            Log::info("⏭️ Email already exists with same message_id: " . $subject);
+            return true;
+        }
         
         $emailData = [
             'message_id' => $message['id'],
@@ -394,19 +343,80 @@ protected function saveEmail($message)
             'processing_status' => 'processed',
             'is_tour_confirmation' => $isTourConfirmation,
             'has_attachments' => $message['hasAttachments'] ?? false,
+            'sales_person' => $salesPerson,
         ];
         
-        Log::info("💾 FINAL - Total amount: {$currency} {$totalAmount} for: " . $subject);
+        // ✅ If existing email found with same tour_ref and invoice_number
+        if ($existingEmail && $existingEmail->message_id != $message['id']) {
+            Log::info("🔄 Found existing email with same Tour Ref: {$tourRef} and Invoice: {$invoiceNumber}");
+            
+            // ✅ Compare fields to check if anything changed
+            $hasChanges = false;
+            $changes = [];
+            
+            $fieldsToCompare = [
+                'agent_name' => $agentName,
+                'guest_name' => $guestName,
+                'file_handler' => $fileHandler,
+                'travel_start_date' => $travelStart,
+                'travel_end_date' => $travelEnd,
+                'number_of_guests' => $numberOfGuests,
+                'pax_count' => $paxCount,
+                'destination' => $destination,
+                'total_amount' => $totalAmount,
+                'currency' => $currency,
+                'sales_person' => $salesPerson,
+                'reference_no' => $agentReferenceNo,
+            ];
+            
+            foreach ($fieldsToCompare as $field => $newValue) {
+                $oldValue = $existingEmail->$field;
+                
+                // Convert both to string for comparison
+                $oldStr = (string)$oldValue;
+                $newStr = (string)$newValue;
+                
+                if ($oldStr !== $newStr) {
+                    $hasChanges = true;
+                    $changes[$field] = [
+                        'old' => $oldStr,
+                        'new' => $newStr
+                    ];
+                    Log::info("   🔄 Field '{$field}' changed: '{$oldStr}' → '{$newStr}'");
+                }
+            }
+            
+            if ($hasChanges) {
+                Log::info("📝 Changes detected! Creating revision invoice...");
+                Log::info("   Changes: " . json_encode($changes, JSON_PRETTY_PRINT));
+                
+                // ✅ Create revision email record with updated data
+                $email = IncomingEmail::create($emailData);
+                Log::info("💾 Created REVISION email: " . $subject . " (ID: " . $email->id . ")");
+                
+                // ✅ Generate revision invoice
+                if ($isTourConfirmation && $tourRef != 'NA' && $invoiceNumber != 'NA') {
+                    $this->autoGenerateRevisionInvoice($email, $existingEmail);
+                }
+                
+                return true;
+            } else {
+                Log::info("✅ No changes detected for email: " . $subject . " - Skipping duplicate");
+                return true;
+            }
+        }
         
+        // ✅ No existing email found - Create new record
         try {
             $email = IncomingEmail::create($emailData);
-            Log::info("💾 Saved email to database: " . $subject . " (ID: " . $email->id . ")");
+            Log::info("💾 Saved NEW email to database: " . $subject . " (ID: " . $email->id . ")");
         } catch (\Illuminate\Database\QueryException $qe) {
             Log::error('❌ Database error: ' . $qe->getMessage() . ' - Subject: ' . $subject);
             Log::error('   Data: ' . json_encode($emailData, JSON_PARTIAL_OUTPUT_ON_ERROR));
             return false;
         }
         
+        // ✅ Auto-generate invoice for new email
         if ($isTourConfirmation && $tourRef != 'NA' && $invoiceNumber != 'NA') {
             $this->autoGenerateInvoice($email);
         }
@@ -424,7 +434,66 @@ protected function saveEmail($message)
         return false;
     }
 }
-
+protected function autoGenerateRevisionInvoice($newEmail, $oldEmail)
+{
+    try {
+        // Check if any invoice exists with this tour_ref or invoice_number
+        $existingInvoice = GeneratedInvoice::where(function($query) use ($newEmail) {
+            $query->where('tour_ref', $newEmail->tour_ref)
+                  ->orWhere('original_invoice_number', $newEmail->invoice_number)
+                  ->orWhere('invoice_number', 'LIKE', $newEmail->invoice_number . '%');
+        })->orderBy('revision_number', 'desc')->first();
+        
+        if (!$existingInvoice) {
+            Log::info("ℹ️ No existing invoice found for revision, creating new invoice");
+            $this->autoGenerateInvoice($newEmail);
+            return;
+        }
+        
+        // ✅ Calculate next revision number
+        $nextRevisionNumber = ($existingInvoice->revision_number ?? 0) + 1;
+        $baseNumber = $newEmail->invoice_number;
+        
+        // ✅ DISPLAY format: VN40113_R2/R2 (with slash for display)
+        $displayInvoiceNumber = $baseNumber . '_R' . $nextRevisionNumber . '/R' . $nextRevisionNumber;
+        
+        // ✅ FILE format: VN40113_R2_R2 (with underscore for filename - NO SLASHES)
+        $fileInvoiceNumber = $baseNumber . '_R' . $nextRevisionNumber . '_R' . $nextRevisionNumber;
+        
+        Log::info("📄 Creating revision invoice: Display: {$displayInvoiceNumber}, File: {$fileInvoiceNumber}");
+        
+        // ✅ Get classification
+        $agentClassifier = new AgentClassificationService();
+        $classification = $agentClassifier->classify(
+            $newEmail->body ?? '', 
+            $newEmail->from_email ?? '', 
+            $newEmail->subject ?? '', 
+            $newEmail->agent_name
+        );
+        
+        // ✅ Create revision invoice using the FILE format (no slashes)
+        $invoiceService = app(InvoiceGenerationService::class);
+        $invoice = $invoiceService->generateRevisionFromEmail(
+            $newEmail, 
+            $classification, 
+            $fileInvoiceNumber,  // ← Use fileInvoiceNumber (no slashes)
+            $nextRevisionNumber,
+            $baseNumber
+        );
+        
+        if ($invoice) {
+            // ✅ Update the invoice number to display format (with slashes) for UI
+            $invoice->invoice_number = $displayInvoiceNumber;
+            $invoice->save();
+            
+            Log::info("✅ Auto-generated REVISION invoice: " . $invoice->invoice_number);
+            Log::info("   Revision: {$nextRevisionNumber} of " . ($invoice->total_revisions ?? $nextRevisionNumber));
+        }
+        
+    } catch (\Exception $e) {
+        Log::error('❌ Auto-generate revision invoice failed: ' . $e->getMessage());
+    }
+}
 /**
  * Detect currency from text context
  */
@@ -1072,73 +1141,89 @@ public function debugSaveOne($messageId)
         return implode("\n", $lines);
     }
     
-    protected function extractField($text, $fieldName)
-    {
-        $tourConfirmationSection = '';
-        if (preg_match('/TOUR CONFIRMATION(.*?)(?:With appreciation|From:|$)/is', $text, $sectionMatch)) {
-            $tourConfirmationSection = $sectionMatch[1];
-            Log::info("Found TOUR CONFIRMATION section for {$fieldName}");
+protected function extractField($text, $fieldName)
+{
+    $tourConfirmationSection = '';
+    if (preg_match('/TOUR CONFIRMATION(.*?)(?:With appreciation|From:|$)/is', $text, $sectionMatch)) {
+        $tourConfirmationSection = $sectionMatch[1];
+        Log::info("Found TOUR CONFIRMATION section for {$fieldName}");
+    }
+    
+    $searchText = !empty($tourConfirmationSection) ? $tourConfirmationSection : $text;
+    $searchText = preg_replace('/[^\x20-\x7E\x0A\x0D]/u', ' ', $searchText);
+    
+    // ✅ PATTERN A: Match lines that start with the field name (BEST FOR TABLE FORMAT)
+    // Example: "| Agent    | 30 SUNDAYS    |"
+    $pattern = '/[|]\s*' . preg_quote($fieldName, '/') . '\s*[|]\s*([^|]+?)\s*[|]/im';
+    if (preg_match($pattern, $searchText, $match)) {
+        $value = trim($match[1]);
+        if (!empty($value) && strlen($value) < 200 && 
+            !preg_match('/^(Tour Ref|Flight|Agent|Guests Name|IS Number|No\. of Guests|Meal Plan|Chauffeur|Emergency|Customer Support|Sales Person)/i', $value)) {
+            Log::info("✓ Extracted {$fieldName} (table format): {$value}");
+            return $value;
         }
-        
-        $searchText = !empty($tourConfirmationSection) ? $tourConfirmationSection : $text;
-        $searchText = preg_replace('/[^\x20-\x7E\x0A\x0D]/u', ' ', $searchText);
-        
-        // Match lines that start with the field name
-        $pattern = '/^' . preg_quote($fieldName, '/') . '\s*:?\s*(.+)$/im';
-        if (preg_match($pattern, $searchText, $match)) {
-            $value = trim($match[1]);
-            if (!empty($value) && strlen($value) < 200 && !preg_match('/^(Tour Ref|Flight|Agent|Guests Name|IS Number|No\. of Guests|Meal Plan|Chauffeur)/i', $value)) {
-                Log::info("✓ Extracted {$fieldName} (line start): {$value}");
-                return $value;
-            }
+    }
+    
+    // ✅ PATTERN B: Match lines that start with the field name (original working code)
+    $pattern2 = '/^' . preg_quote($fieldName, '/') . '\s*:?\s*(.+)$/im';
+    if (preg_match($pattern2, $searchText, $match)) {
+        $value = trim($match[1]);
+        if (!empty($value) && strlen($value) < 200 && 
+            !preg_match('/^(Tour Ref|Flight|Agent|Guests Name|IS Number|No\. of Guests|Meal Plan|Chauffeur)/i', $value)) {
+            Log::info("✓ Extracted {$fieldName} (line start): {$value}");
+            return $value;
         }
-        
-        // Field Name followed by newline then value
-        $pattern1 = '/' . preg_quote($fieldName, '/') . '\s*\n\s*([^\n]+)/i';
-        if (preg_match($pattern1, $searchText, $match)) {
-            $value = trim($match[1]);
-            $value = preg_replace('/\s+/', ' ', $value);
-            if (!empty($value) && strlen($value) < 200 && !preg_match('/^(Tour Ref|Flight|Agent|Guests Name|IS Number|No\. of Guests|Meal Plan)/i', $value)) {
-                Log::info("✓ Extracted {$fieldName} (pattern1): {$value}");
-                return $value;
-            }
+    }
+    
+    // ✅ PATTERN C: Field Name followed by newline then value
+    $pattern3 = '/' . preg_quote($fieldName, '/') . '\s*\n\s*([^\n]+)/i';
+    if (preg_match($pattern3, $searchText, $match)) {
+        $value = trim($match[1]);
+        $value = preg_replace('/\s+/', ' ', $value);
+        if (!empty($value) && strlen($value) < 200 && 
+            !preg_match('/^(Tour Ref|Flight|Agent|Guests Name|IS Number|No\. of Guests|Meal Plan)/i', $value)) {
+            Log::info("✓ Extracted {$fieldName} (newline): {$value}");
+            return $value;
         }
-        
-        // Field Name followed by spaces then value
-        $pattern2 = '/' . preg_quote($fieldName, '/') . '\s*:?\s*([^\n]+)/i';
-        if (preg_match($pattern2, $searchText, $match)) {
-            $value = trim($match[1]);
-            $value = preg_replace('/\s+/', ' ', $value);
-            if (!empty($value) && strlen($value) < 200 && !preg_match('/^(Tour Ref|Flight|Agent|Guests Name|IS Number|No\. of Guests|Meal Plan)/i', $value)) {
-                Log::info("✓ Extracted {$fieldName} (pattern2): {$value}");
-                return $value;
-            }
+    }
+    
+    // ✅ PATTERN D: Field Name followed by spaces then value
+    $pattern4 = '/' . preg_quote($fieldName, '/') . '\s*:?\s*([^\n]+)/i';
+    if (preg_match($pattern4, $searchText, $match)) {
+        $value = trim($match[1]);
+        $value = preg_replace('/\s+/', ' ', $value);
+        if (!empty($value) && strlen($value) < 200 && 
+            !preg_match('/^(Tour Ref|Flight|Agent|Guests Name|IS Number|No\. of Guests|Meal Plan)/i', $value)) {
+            Log::info("✓ Extracted {$fieldName} (spaces): {$value}");
+            return $value;
         }
-        
-        // Check next line after the field name
-        $lines = explode("\n", $searchText);
-        foreach ($lines as $i => $line) {
-            if (preg_match('/' . preg_quote($fieldName, '/') . '/i', $line)) {
-                if (isset($lines[$i + 1])) {
-                    $value = trim($lines[$i + 1]);
-                    if (!empty($value) && !preg_match('/^(Emergency contact|Customer Support|Tour Ref|Flight|Agent|Guests Name|IS Number|No\. of Guests|Meal Plan)/i', $value)) {
-                        Log::info("✓ Extracted {$fieldName} (pattern3 - next line): {$value}");
-                        return $value;
-                    }
-                }
-                $value = preg_replace('/' . preg_quote($fieldName, '/') . '\s*/i', '', $line);
-                $value = trim($value);
-                if (!empty($value) && strlen($value) < 200 && !preg_match('/^(Tour Ref|Flight|Agent|Guests Name|IS Number|No\. of Guests|Meal Plan)/i', $value)) {
-                    Log::info("✓ Extracted {$fieldName} (pattern3 - same line): {$value}");
+    }
+    
+    // ✅ PATTERN E: Check next line after the field name
+    $lines = explode("\n", $searchText);
+    foreach ($lines as $i => $line) {
+        if (preg_match('/' . preg_quote($fieldName, '/') . '/i', $line)) {
+            if (isset($lines[$i + 1])) {
+                $value = trim($lines[$i + 1]);
+                if (!empty($value) && 
+                    !preg_match('/^(Emergency contact|Customer Support|Tour Ref|Flight|Agent|Guests Name|IS Number|No\. of Guests|Meal Plan)/i', $value)) {
+                    Log::info("✓ Extracted {$fieldName} (next line): {$value}");
                     return $value;
                 }
             }
+            $value = preg_replace('/' . preg_quote($fieldName, '/') . '\s*/i', '', $line);
+            $value = trim($value);
+            if (!empty($value) && strlen($value) < 200 && 
+                !preg_match('/^(Tour Ref|Flight|Agent|Guests Name|IS Number|No\. of Guests|Meal Plan)/i', $value)) {
+                Log::info("✓ Extracted {$fieldName} (same line): {$value}");
+                return $value;
+            }
         }
-        
-        Log::info("✗ Could not extract {$fieldName} from text");
-        return null;
     }
     
+    Log::info("✗ Could not extract {$fieldName} from text");
+    return null;
+}
     protected function extractTourRef($text)
     {
         $patterns = [

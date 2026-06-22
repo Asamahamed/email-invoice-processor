@@ -81,10 +81,23 @@ class GenerateDailyReportCommand extends Command
         $spreadsheet = new Spreadsheet();
         $sheet = $spreadsheet->getActiveSheet();
         
+        // ✅ ADDED: Agent ID column after Agent Name
         $headers = [
-            'S.No', 'Invoice #', 'Tour Ref', 'Agent Name', 'Guest Name',
-            'Amount', 'Currency', 'File Handler', 'Tour Start Date',
-            'Travel Date', 'Sales Person', 'GST No', 'Revision', 'Created At'
+            'S.No', 
+            'Invoice #', 
+            'Tour Ref', 
+            'Agent Name', 
+            'Agent ID',      // ← NEW COLUMN
+            'Guest Name',
+            'Amount', 
+            'Currency', 
+            'File Handler', 
+            'Tour Start Date',
+            'Travel Date', 
+            'Sales Person', 
+            'GST No', 
+            'Revision', 
+            'Created At'
         ];
         
         $col = 'A';
@@ -104,6 +117,11 @@ class GenerateDailyReportCommand extends Command
             $sheet->setCellValue($col++ . $row, $this->sanitizeString($invoice->invoice_number));
             $sheet->setCellValue($col++ . $row, $this->sanitizeString($invoice->tour_ref));
             $sheet->setCellValue($col++ . $row, $this->sanitizeString($invoice->customer_name));
+            
+            // ✅ ADDED: Agent ID from email reference_no
+            $agentId = $invoice->email->reference_no ?? 'NA';
+            $sheet->setCellValue($col++ . $row, $this->sanitizeString($agentId));
+            
             $sheet->setCellValue($col++ . $row, $this->sanitizeString($invoice->guest_name));
             $sheet->setCellValue($col++ . $row, $invoice->grand_total);
             $sheet->setCellValue($col++ . $row, $this->sanitizeString($invoice->currency));
@@ -121,10 +139,12 @@ class GenerateDailyReportCommand extends Command
         
         $row++;
         $sheet->setCellValue('A' . $row, 'TOTAL');
-        $sheet->setCellValue('F' . $row, $totalAmount);
-        $sheet->getStyle('A' . $row . ':N' . $row)->getFont()->setBold(true);
+        // ✅ FIX: Column for Total is now 'G' (because we added Agent ID column)
+        $sheet->setCellValue('G' . $row, $totalAmount);
+        $sheet->getStyle('A' . $row . ':O' . $row)->getFont()->setBold(true); // Updated to O (15 columns)
         
-        foreach (range('A', 'N') as $col) {
+        // ✅ UPDATE: Auto-size all columns (A to O)
+        foreach (range('A', 'O') as $col) {
             $sheet->getColumnDimension($col)->setAutoSize(true);
         }
         
@@ -207,130 +227,130 @@ class GenerateDailyReportCommand extends Command
         return $start ?: 'NA';
     }
 
-protected function uploadToOneDrive($filePath, $date)
-{
-    try {
-        $filename = basename($filePath);
-        $folderPath = env('ONEDRIVE_FOLDER_PATH', '/Invoice Report/');
-        $userEmail = env('ONEDRIVE_USER', env('GRAPH_INVOICE_USER'));
-        
-        $this->info("📤 Uploading to OneDrive: {$folderPath}{$filename}");
-        $this->info("📧 Using account: {$userEmail}");
-        
-        if (!file_exists($filePath) || !is_readable($filePath)) {
-            $this->error("❌ File not found or not readable: {$filePath}");
-            return;
-        }
-        
-        $content = file_get_contents($filePath);
-        
-        if (empty($content)) {
-            $this->error("❌ File is empty: {$filePath}");
-            return;
-        }
-        
-        $this->info("📄 File size: " . number_format(strlen($content)) . " bytes");
-        
-        $graphService = new MicrosoftGraphService();
-        
-        // Get token via reflection
-        $reflection = new \ReflectionProperty($graphService, 'accessToken');
-        $reflection->setAccessible(true);
-        $token = $reflection->getValue($graphService);
-        
-        if (empty($token)) {
-            $this->error("❌ No access token available.");
-            Log::error("OneDrive upload failed: No access token");
-            return;
-        }
-        
-        $encodedFolder = str_replace(' ', '%20', $folderPath);
-        $uploadUrl = "https://graph.microsoft.com/v1.0/users/{$userEmail}/drive/root:{$encodedFolder}{$filename}:/content";
-        
-        $this->info("📡 Uploading to: " . str_replace($userEmail, '***', $uploadUrl));
-        
-        // ✅ Fix: Use Guzzle directly with proper binary body
-        $client = new \GuzzleHttp\Client([
-            'timeout' => 120,
-            'verify' => false,
-        ]);
-        
-        $response = $client->put($uploadUrl, [
-            'headers' => [
-                'Authorization' => 'Bearer ' . $token,
-                'Content-Type' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-            ],
-            'body' => $content,
-        ]);
-        
-        if ($response->getStatusCode() >= 200 && $response->getStatusCode() < 300) {
-            $this->info("✅ Uploaded to OneDrive: {$folderPath}{$filename}");
-            Log::info("Uploaded daily report to OneDrive: {$folderPath}{$filename}");
+    protected function uploadToOneDrive($filePath, $date)
+    {
+        try {
+            $filename = basename($filePath);
+            $folderPath = env('ONEDRIVE_FOLDER_PATH', '/Invoice Report/');
+            $userEmail = env('ONEDRIVE_USER', env('GRAPH_INVOICE_USER'));
             
-            $responseBody = $response->getBody()->getContents();
-            $fileData = json_decode($responseBody, true);
-            if (isset($fileData['webUrl'])) {
-                $this->info("🔗 File URL: " . $fileData['webUrl']);
+            $this->info("📤 Uploading to OneDrive: {$folderPath}{$filename}");
+            $this->info("📧 Using account: {$userEmail}");
+            
+            if (!file_exists($filePath) || !is_readable($filePath)) {
+                $this->error("❌ File not found or not readable: {$filePath}");
+                return;
             }
-        } else {
-            $this->error("❌ Upload failed: Status " . $response->getStatusCode());
-            $this->error("❌ Response: " . $response->getBody()->getContents());
-            Log::error("OneDrive upload failed: " . $response->getBody()->getContents());
             
-            // Try alternative endpoint
-            $this->info("🔄 Trying alternative endpoint...");
-            $this->uploadToOneDriveAlternative($filePath, $date);
+            $content = file_get_contents($filePath);
+            
+            if (empty($content)) {
+                $this->error("❌ File is empty: {$filePath}");
+                return;
+            }
+            
+            $this->info("📄 File size: " . number_format(strlen($content)) . " bytes");
+            
+            $graphService = new MicrosoftGraphService();
+            
+            // Get token via reflection
+            $reflection = new \ReflectionProperty($graphService, 'accessToken');
+            $reflection->setAccessible(true);
+            $token = $reflection->getValue($graphService);
+            
+            if (empty($token)) {
+                $this->error("❌ No access token available.");
+                Log::error("OneDrive upload failed: No access token");
+                return;
+            }
+            
+            $encodedFolder = str_replace(' ', '%20', $folderPath);
+            $uploadUrl = "https://graph.microsoft.com/v1.0/users/{$userEmail}/drive/root:{$encodedFolder}{$filename}:/content";
+            
+            $this->info("📡 Uploading to: " . str_replace($userEmail, '***', $uploadUrl));
+            
+            // ✅ Fix: Use Guzzle directly with proper binary body
+            $client = new \GuzzleHttp\Client([
+                'timeout' => 120,
+                'verify' => false,
+            ]);
+            
+            $response = $client->put($uploadUrl, [
+                'headers' => [
+                    'Authorization' => 'Bearer ' . $token,
+                    'Content-Type' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                ],
+                'body' => $content,
+            ]);
+            
+            if ($response->getStatusCode() >= 200 && $response->getStatusCode() < 300) {
+                $this->info("✅ Uploaded to OneDrive: {$folderPath}{$filename}");
+                Log::info("Uploaded daily report to OneDrive: {$folderPath}{$filename}");
+                
+                $responseBody = $response->getBody()->getContents();
+                $fileData = json_decode($responseBody, true);
+                if (isset($fileData['webUrl'])) {
+                    $this->info("🔗 File URL: " . $fileData['webUrl']);
+                }
+            } else {
+                $this->error("❌ Upload failed: Status " . $response->getStatusCode());
+                $this->error("❌ Response: " . $response->getBody()->getContents());
+                Log::error("OneDrive upload failed: " . $response->getBody()->getContents());
+                
+                // Try alternative endpoint
+                $this->info("🔄 Trying alternative endpoint...");
+                $this->uploadToOneDriveAlternative($filePath, $date);
+            }
+            
+        } catch (\Exception $e) {
+            $this->error("❌ Upload error: " . $e->getMessage());
+            Log::error("OneDrive upload error: " . $e->getMessage());
         }
-        
-    } catch (\Exception $e) {
-        $this->error("❌ Upload error: " . $e->getMessage());
-        Log::error("OneDrive upload error: " . $e->getMessage());
     }
-}
 
-protected function uploadToOneDriveAlternative($filePath, $date)
-{
-    try {
-        $filename = basename($filePath);
-        $folderPath = env('ONEDRIVE_FOLDER_PATH', '/Invoice Report/');
-        
-        $graphService = new MicrosoftGraphService();
-        $reflection = new \ReflectionProperty($graphService, 'accessToken');
-        $reflection->setAccessible(true);
-        $token = $reflection->getValue($graphService);
-        
-        if (empty($token)) {
-            $this->error("❌ No token for alternative upload");
-            return;
+    protected function uploadToOneDriveAlternative($filePath, $date)
+    {
+        try {
+            $filename = basename($filePath);
+            $folderPath = env('ONEDRIVE_FOLDER_PATH', '/Invoice Report/');
+            
+            $graphService = new MicrosoftGraphService();
+            $reflection = new \ReflectionProperty($graphService, 'accessToken');
+            $reflection->setAccessible(true);
+            $token = $reflection->getValue($graphService);
+            
+            if (empty($token)) {
+                $this->error("❌ No token for alternative upload");
+                return;
+            }
+            
+            $content = file_get_contents($filePath);
+            $encodedFolder = str_replace(' ', '%20', $folderPath);
+            $uploadUrl = "https://graph.microsoft.com/v1.0/me/drive/root:{$encodedFolder}{$filename}:/content";
+            
+            // ✅ Use Guzzle directly
+            $client = new \GuzzleHttp\Client([
+                'timeout' => 120,
+                'verify' => false,
+            ]);
+            
+            $response = $client->put($uploadUrl, [
+                'headers' => [
+                    'Authorization' => 'Bearer ' . $token,
+                    'Content-Type' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                ],
+                'body' => $content,
+            ]);
+            
+            if ($response->getStatusCode() >= 200 && $response->getStatusCode() < 300) {
+                $this->info("✅ Uploaded to OneDrive (alternative): {$folderPath}{$filename}");
+                Log::info("Uploaded daily report to OneDrive (alt): {$folderPath}{$filename}");
+            } else {
+                $this->error("❌ Alternative upload failed: " . $response->getBody()->getContents());
+            }
+            
+        } catch (\Exception $e) {
+            $this->error("❌ Alternative upload error: " . $e->getMessage());
         }
-        
-        $content = file_get_contents($filePath);
-        $encodedFolder = str_replace(' ', '%20', $folderPath);
-        $uploadUrl = "https://graph.microsoft.com/v1.0/me/drive/root:{$encodedFolder}{$filename}:/content";
-        
-        // ✅ Use Guzzle directly
-        $client = new \GuzzleHttp\Client([
-            'timeout' => 120,
-            'verify' => false,
-        ]);
-        
-        $response = $client->put($uploadUrl, [
-            'headers' => [
-                'Authorization' => 'Bearer ' . $token,
-                'Content-Type' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-            ],
-            'body' => $content,
-        ]);
-        
-        if ($response->getStatusCode() >= 200 && $response->getStatusCode() < 300) {
-            $this->info("✅ Uploaded to OneDrive (alternative): {$folderPath}{$filename}");
-            Log::info("Uploaded daily report to OneDrive (alt): {$folderPath}{$filename}");
-        } else {
-            $this->error("❌ Alternative upload failed: " . $response->getBody()->getContents());
-        }
-        
-    } catch (\Exception $e) {
-        $this->error("❌ Alternative upload error: " . $e->getMessage());
     }
-}
 }

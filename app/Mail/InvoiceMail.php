@@ -16,11 +16,19 @@ class InvoiceMail extends Mailable
 
     public $invoice;
     public $emailType;
+    public $displayCurrency;
 
     public function __construct(GeneratedInvoice $invoice, $emailType = 'credit')
     {
         $this->invoice = $invoice;
         $this->emailType = $emailType;
+        
+        // ✅ Determine display currency based on email type
+        if ($emailType == 'credit') {
+            $this->displayCurrency = 'USD';  // Credit agents get USD
+        } else {
+            $this->displayCurrency = 'INR';  // Non-credit agents get INR
+        }
     }
 
     public function envelope(): Envelope
@@ -47,6 +55,7 @@ class InvoiceMail extends Mailable
             with: [
                 'body' => $body,
                 'invoice' => $this->invoice,
+                'displayCurrency' => $this->displayCurrency,  // ✅ Pass display currency to view
             ],
         );
     }
@@ -78,7 +87,7 @@ class InvoiceMail extends Mailable
     }
 
     /**
-     * ✅ CREDIT Agent Email
+     * ✅ CREDIT Agent Email (USD)
      */
     protected function getCreditBody()
     {
@@ -92,7 +101,7 @@ class InvoiceMail extends Mailable
     }
 
     /**
-     * ✅ NON-CREDIT Agent Email
+     * ✅ NON-CREDIT Agent Email (INR)
      */
     protected function getNonCreditBody()
     {
@@ -119,13 +128,25 @@ class InvoiceMail extends Mailable
      */
     protected function getRevisionBody()
     {
-        return "Dear Team,\n\n" .
-               "Greetings from Apple Holidays!\n\n" .
-               "Kindly find the attached revised invoice.\n\n" .
-               "WE REQUIRED THE ALL PASSENGERS AADHAR LINKED PAN CARD, FLIGHT TICKETS, VISA & THE PASSPORT COPIES WITH ADDRESS PAGE.\n\n" .
-               "NOTE: (PLEASE IGNORE IF YOU SHARED THE DOCUMENTS)\n\n" .
-               "Thanks & Regards,\n" .
-               "Accounts Team\n" .
-               "Apple Holidays";
+        // ✅ For revision, check if it's credit or non-credit
+        if ($this->invoice->invoice_type == 'credit') {
+            return "Dear Team,\n\n" .
+                   "Greetings from Apple Holidays!\n\n" .
+                   "Kindly find the attached revised invoice.\n\n" .
+                   "WE REQUIRED THE ALL PASSENGERS AADHAR LINKED PAN CARD, FLIGHT TICKETS, VISA & THE PASSPORT COPIES WITH ADDRESS PAGE.\n\n" .
+                   "NOTE: (PLEASE IGNORE IF YOU SHARED THE DOCUMENTS)\n\n" .
+                   "Thanks & Regards,\n" .
+                   "Accounts Team\n" .
+                   "Apple Holidays";
+        } else {
+            return "Dear Team,\n\n" .
+                   "Greetings from Apple Holidays!\n\n" .
+                   "Kindly find the attached revised invoice.\n\n" .
+                   "Kindly make the full payment on or before 24 hours without any fail.\n\n" .
+                   "NOTE: (PLEASE IGNORE IF YOU SHARED THE DOCUMENTS)\n\n" .
+                   "Thanks & Regards,\n" .
+                   "Accounts Team\n" .
+                   "Apple Holidays";
+        }
     }
 }

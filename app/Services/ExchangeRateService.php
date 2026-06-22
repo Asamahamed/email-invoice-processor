@@ -78,6 +78,8 @@ class ExchangeRateService
         
         Cache::put('myr_to_inr_rate', $finalRate, 3600);
         
+        Log::info("✅ MYR to INR rate: {$finalRate} (Base: {$rate} + 1)");
+        
         return $finalRate;
     }
 
@@ -145,11 +147,11 @@ class ExchangeRateService
      */
     protected function getFallbackRate($from, $to)
     {
-        // Common exchange rates (approximate)
+        // Common exchange rates (approximate) - ✅ UPDATED with correct rates
         $rates = [
-            'USD_INR' => 83.50,
-            'SGD_INR' => 62.00,
-            'MYR_INR' => 17.50,
+            'USD_INR' => 83.50,    // 1 USD = 83.50 INR
+            'SGD_INR' => 62.00,    // 1 SGD = 62.00 INR
+            'MYR_INR' => 22.82,    // 1 MYR = 22.82 INR (from your XE.com screenshot)
             'EUR_INR' => 90.00,
             'GBP_INR' => 105.00,
         ];
@@ -175,9 +177,9 @@ class ExchangeRateService
             return 62.00;
         }
         
-        // Default fallback for MYR to INR
+        // Default fallback for MYR to INR - ✅ CORRECTED
         if ($from === 'MYR' && $to === 'INR') {
-            return 17.50;
+            return 22.82;  // From your XE.com screenshot
         }
         
         return 83.50; // Default USD to INR
@@ -220,4 +222,4 @@ class ExchangeRateService
             Log::info("Refreshed {$from} to {$to} rate: {$rate}");
         }
     }
-}
+}   

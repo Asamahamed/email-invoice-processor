@@ -9,6 +9,7 @@ use Illuminate\Support\Facades\Log;
 use App\Models\AgentGst;
 use App\Mail\InvoiceMail;
 use Illuminate\Support\Facades\Mail;
+use App\Services\AgentClassificationService;
 
 class InvoiceGenerationService
 {
@@ -57,34 +58,37 @@ public function generateFromEmail($email, $classification = null, $revisionNumbe
     
     $totalRevisions = $existingInvoices->count();
     
-    // ✅ Determine the invoice number
-    if ($totalRevisions == 0) {
-        $displayInvoiceNumber = $cleanBase;
-        $fileInvoiceNumber = $cleanBase;
-        $currentRevision = 0;
-        $totalRevisionsCount = 0;
-        $isRevision = false;
-        $newTotal = 0;
-    } else {
-        $existingForEmail = $existingInvoices->where('email_id', $email->id)->first();
-        
-        if ($existingForEmail) {
-            Log::info("⏭️ Invoice {$cleanBase} already exists for this email. Returning existing.");
-            return $existingForEmail;
-        }
-        
-        $isRevision = true;
-        $newTotal = $totalRevisions + 1;
-        $currentRevision = $newTotal;
-        
-        $displayInvoiceNumber = $cleanBase . '_R' . $currentRevision . '/R' . $newTotal;
-        $fileInvoiceNumber = $cleanBase . '_R' . $currentRevision . '_R' . $newTotal;
-        
-        $this->updatePreviousRevisions($cleanBase, $newTotal);
-        
-        Log::info("📄 Revision detected: New total = {$newTotal}, Current = {$currentRevision}");
-        Log::info("📄 Display: {$displayInvoiceNumber}, File: {$fileInvoiceNumber}");
+// ✅ Determine the invoice number
+if ($totalRevisions == 0) {
+    $displayInvoiceNumber = $cleanBase;
+    $fileInvoiceNumber = $cleanBase;
+    $currentRevision = 0;
+    $totalRevisionsCount = 0;
+    $isRevision = false;
+    $newTotal = 0;
+} else {
+    $existingForEmail = $existingInvoices->where('email_id', $email->id)->first();
+    
+    if ($existingForEmail) {
+        Log::info("⏭️ Invoice {$cleanBase} already exists for this email. Returning existing.");
+        return $existingForEmail;
     }
+    
+    $isRevision = true;
+    $newTotal = $totalRevisions + 1;
+    $currentRevision = $newTotal;
+    
+    // ✅ DISPLAY format: IS48329_R2/R2 (for UI)
+    $displayInvoiceNumber = $cleanBase . '_R' . $currentRevision . '/R' . $newTotal;
+    
+    // ✅ FILE format: IS48329_R2_R2 (for filename - NO slashes)
+    $fileInvoiceNumber = $cleanBase . '_R' . $currentRevision . '_R' . $newTotal;
+    
+    $this->updatePreviousRevisions($cleanBase, $newTotal);
+    
+    Log::info("📄 Revision detected: New total = {$newTotal}, Current = {$currentRevision}");
+    Log::info("📄 Display: {$displayInvoiceNumber}, File: {$fileInvoiceNumber}");
+}
     
     // Create directory
     $directory = storage_path('app/public/invoices');
@@ -96,29 +100,30 @@ public function generateFromEmail($email, $classification = null, $revisionNumbe
     $htmlBody = $email->body ?? '';
     $plainText = $this->htmlToPlainText($htmlBody);
     
-    // ✅ STEP 2: Extract total amount from email
+    // ✅ STEP 2: Get the currency and amount from email
+    $currency = $email->currency ?? 'USD';
     $originalAmount = $email->total_amount ?? 0;
-    $originalCurrency = 'USD';
     
-    // ✅ STEP 3: Detect currency from email body
-    $detectedCurrency = $this->detectCurrency($plainText);
-    Log::info("Detected currency: {$detectedCurrency}");
+    Log::info("💰 Original Amount: {$originalAmount} {$currency}");
     
-    // ✅ STEP 4: Convert amount based on detected currency
-    $totalAmount = $originalAmount;
-    $currency = $detectedCurrency;
+    // ✅ STEP 3: Get the correct exchange rate based on currency
+    $exchangeService = new ExchangeRateService();
+    $exchangeRate = null;
     
-    // If currency is not USD, convert to INR for calculations
-    if ($detectedCurrency == 'SGD' || $detectedCurrency == 'MYR' || $detectedCurrency == 'VND' || $detectedCurrency == 'LKR') {
-        $originalAmount = $totalAmount;
-        $totalAmount = $this->convertToINR($totalAmount, $detectedCurrency);
-        $currency = 'INR';
-        $hasHandlingFee = true; // Force handling fee for non-USD currencies
-        Log::info("Converted {$originalAmount} {$detectedCurrency} to INR {$totalAmount}");
-    } else {
-        // For USD, use the original amount
-        $totalAmount = $originalAmount;
-        $currency = 'USD';
+    switch ($currency) {
+        case 'MYR':
+            $exchangeRate = $exchangeService->getMyrToInrRate(); // 22.82 + 1 = 23.82
+            Log::info("🇲🇾 Using MYR to INR rate: {$exchangeRate}");
+            break;
+        case 'SGD':
+            $exchangeRate = $exchangeService->getSgdToInrRate(); // 62.00 + 1 = 63.00
+            Log::info("🇸🇬 Using SGD to INR rate: {$exchangeRate}");
+            break;
+        case 'USD':
+        default:
+            $exchangeRate = $exchangeService->getUsdToInrRate(); // 83.50 + 1 = 84.50
+            Log::info("🇺🇸 Using USD to INR rate: {$exchangeRate}");
+            break;
     }
     
     $totalGuests = (int)($email->number_of_guests ?? $email->pax_count ?? 1);
@@ -126,64 +131,94 @@ public function generateFromEmail($email, $classification = null, $revisionNumbe
         $totalGuests = 1;
     }
     
-    $exchangeRate = $email->exchange_rate ?? $this->getExchangeRate();
-    $handlingFeePerPersonUSD = 5;
-    
-    // ✅ STEP 5: Get classification values
+    // ✅ STEP 4: Calculate correctly
     $hasHandlingFee = $classification['has_handling_fee'] ?? false;
     $invoiceFormat = $classification['invoice_format'] ?? 'apple_holidays';
-    $currency = $classification['currency'] ?? $currency; // Use detected currency if not set
     
-    // ✅ STEP 6: Calculate invoice amounts
     if (!$hasHandlingFee) {
-        // No handling fee - Direct amount
+        // ✅ NO Handling Fee - Direct conversion
+        $totalAmountINR = $originalAmount * $exchangeRate;
         $handlingFee = 0;
-        $grandTotal = $totalAmount;
-        $currency = $currency;
-        $calculations = null;
-    } else {
-        // With handling fee - Convert to INR
-        $perPersonUSD = $totalAmount / $totalGuests;
-        $netPerPersonUSD = $perPersonUSD - $handlingFeePerPersonUSD;
-        $netPerPersonINR = $netPerPersonUSD * $exchangeRate;
-        $totalTourCostINR = $netPerPersonINR * $totalGuests;
-        $handlingFeePerPersonINR = $handlingFeePerPersonUSD * $exchangeRate;
-        $totalHandlingFeeINR = $handlingFeePerPersonINR * $totalGuests;
-        $subTotalINR = $totalTourCostINR + $totalHandlingFeeINR;
-        
-        $cgstPercent = $email->cgst_percent ?? 9;
-        $sgstPercent = $email->sgst_percent ?? 9;
-        $cgst = $totalHandlingFeeINR * ($cgstPercent / 100);
-        $sgst = $totalHandlingFeeINR * ($sgstPercent / 100);
-        $finalGrandTotal = $subTotalINR + $cgst + $sgst;
-        
-        $handlingFee = $totalHandlingFeeINR;
-        $grandTotal = $finalGrandTotal;
+        $grandTotal = $totalAmountINR;
         $currency = 'INR';
+        $calculations = null;
         
-        $calculations = [
-            'original_amount' => $totalAmount,
-            'original_currency' => $detectedCurrency,
-            'total_guests' => $totalGuests,
-            'per_person_amount' => $perPersonUSD,
-            'handling_fee_per_person_usd' => $handlingFeePerPersonUSD,
-            'net_per_person_usd' => $netPerPersonUSD,
-            'exchange_rate' => $exchangeRate,
-            'net_per_person_inr' => $netPerPersonINR,
-            'handling_fee_per_person_inr' => $handlingFeePerPersonINR,
-            'total_tour_cost_inr' => $totalTourCostINR,
-            'total_handling_fee_inr' => $totalHandlingFeeINR,
-            'sub_total_inr' => $subTotalINR,
-            'cgst_percent' => $cgstPercent,
-            'cgst_amount' => $cgst,
-            'sgst_percent' => $sgstPercent,
-            'sgst_amount' => $sgst,
-            'final_total_inr' => $finalGrandTotal,
-            'gst_number' => $gstNumber,
-            'sales_person' => $salesPerson,
-            'detected_currency' => $detectedCurrency,
-        ];
-    }
+        Log::info("✅ No handling fee: {$originalAmount} {$email->currency} × {$exchangeRate} = {$totalAmountINR} INR");
+        
+    } else {
+    // ✅ WITH Handling Fee - CORRECTED CALCULATION
+    
+    // ✅ Handling fee is ALWAYS 5 in the email's currency
+    // For USD: $5 per person
+    // For MYR: RM 5 per person
+    // For SGD: SGD 5 per person
+    $handlingFeePerPersonOriginalCurrency = 5;
+    
+    Log::info("💵 Handling fee per person in {$currency}: {$handlingFeePerPersonOriginalCurrency}");
+    
+    // ✅ Per person in original currency
+    $perPersonOriginal = $originalAmount / $totalGuests;
+    
+    // ✅ Unit Fare / Cost Per Person = Per Person - Handling Fee
+    $unitFareOriginal = $perPersonOriginal - $handlingFeePerPersonOriginalCurrency;
+    
+    // ✅ Convert to INR
+    $perPersonINR = $perPersonOriginal * $exchangeRate;
+    $unitFareINR = $unitFareOriginal * $exchangeRate;
+    $totalAmountINR = $originalAmount * $exchangeRate;
+    $handlingFeePerPersonINR = $handlingFeePerPersonOriginalCurrency * $exchangeRate;
+    $totalHandlingFeeINR = $handlingFeePerPersonINR * $totalGuests;
+    
+    // ✅ Sub total (Tour cost + Handling fee) - same as original total in INR
+    $subTotalINR = $totalAmountINR;
+    
+    // ✅ GST on handling fee only
+    $cgstPercent = $email->cgst_percent ?? 9;
+    $sgstPercent = $email->sgst_percent ?? 9;
+    $cgst = $totalHandlingFeeINR * ($cgstPercent / 100);
+    $sgst = $totalHandlingFeeINR * ($sgstPercent / 100);
+    
+    // ✅ Grand Total = Tour Cost + GST on Handling Fee
+    $grandTotal = $totalAmountINR + $cgst + $sgst;
+    $handlingFee = $totalHandlingFeeINR;
+    $currency = 'INR';
+    
+    $calculations = [
+        'original_amount' => $originalAmount,
+        'original_currency' => $email->currency,
+        'total_guests' => $totalGuests,
+        'per_person_original' => $perPersonOriginal,
+        'per_person_inr' => $perPersonINR,
+        'handling_fee_per_person_original' => $handlingFeePerPersonOriginalCurrency,
+        'handling_fee_per_person_inr' => $handlingFeePerPersonINR,
+        'total_handling_fee_inr' => $totalHandlingFeeINR,
+        'unit_fare_original' => $unitFareOriginal,
+        'unit_fare_inr' => $unitFareINR,
+        'exchange_rate' => $exchangeRate,
+        'total_amount_inr' => $totalAmountINR,
+        'sub_total_inr' => $subTotalINR,
+        'cgst_percent' => $cgstPercent,
+        'cgst_amount' => $cgst,
+        'sgst_percent' => $sgstPercent,
+        'sgst_amount' => $sgst,
+        'final_total_inr' => $grandTotal,
+        'gst_number' => $gstNumber,
+        'sales_person' => $salesPerson,
+        'detected_currency' => $email->currency,
+    ];
+    
+    Log::info("✅ With handling fee:");
+    Log::info("   Original: {$originalAmount} {$email->currency}");
+    Log::info("   Per person: {$perPersonOriginal} {$email->currency}");
+    Log::info("   Handling fee per person: {$handlingFeePerPersonOriginalCurrency} {$email->currency}");
+    Log::info("   Unit Fare (Per Person - Fee): {$unitFareOriginal} {$email->currency}");
+    Log::info("   Exchange rate: {$exchangeRate}");
+    Log::info("   Total INR: {$totalAmountINR}");
+    Log::info("   Handling fee INR: {$totalHandlingFeeINR}");
+    Log::info("   CGST: {$cgst}");
+    Log::info("   SGST: {$sgst}");
+    Log::info("   Grand Total: {$grandTotal}");
+}
     
     // ✅ Create invoice record
     $invoice = GeneratedInvoice::create([
@@ -193,8 +228,8 @@ public function generateFromEmail($email, $classification = null, $revisionNumbe
         'customer_name' => $email->agent_name ?? ($email->guest_name ?? 'Unknown Customer'),
         'guest_name' => $email->guest_name,
         'tour_ref' => $email->tour_ref,
-        'total_amount' => $totalAmount,
-        'handling_fee' => $handlingFee,
+        'total_amount' => $originalAmount,
+        'handling_fee' => $handlingFee ?? 0,
         'grand_total' => $grandTotal,
         'currency' => $currency,
         'invoice_type' => $classification['credit_type'],
@@ -226,6 +261,58 @@ public function generateFromEmail($email, $classification = null, $revisionNumbe
     Log::info("✅ Created invoice: {$displayInvoiceNumber}");
     
     return $invoice;
+}
+
+/**
+ * ✅ Get USD to any currency rate
+ * Fixed: Required parameters first, optional after
+ */
+protected function getUsdToCurrencyRate($toCurrency, $fromCurrency = 'USD')
+{
+    try {
+        if ($toCurrency == 'USD') {
+            return 1;
+        }
+        
+        // Try to get from cache first
+        $cacheKey = strtolower($fromCurrency) . '_to_' . strtolower($toCurrency) . '_rate';
+        $cachedRate = \Illuminate\Support\Facades\Cache::get($cacheKey);
+        if ($cachedRate) {
+            return $cachedRate;
+        }
+        
+        // Fetch from API
+        $response = \Illuminate\Support\Facades\Http::timeout(10)
+            ->get("https://api.exchangerate-api.com/v4/latest/{$fromCurrency}");
+        
+        if ($response->successful()) {
+            $data = $response->json();
+            $rate = $data['rates'][$toCurrency] ?? null;
+            if ($rate) {
+                \Illuminate\Support\Facades\Cache::put($cacheKey, $rate, 3600);
+                Log::info("✅ USD to {$toCurrency} rate: {$rate}");
+                return $rate;
+            }
+        }
+        
+        // Fallback rates
+        $fallbackRates = [
+            'MYR' => 4.42,  // 1 USD = 4.42 MYR
+            'SGD' => 1.34,  // 1 SGD = 1.34 USD
+            'INR' => 83.50, // 1 USD = 83.50 INR
+        ];
+        
+        if (isset($fallbackRates[$toCurrency])) {
+            Log::warning("⚠️ Using fallback USD to {$toCurrency} rate: {$fallbackRates[$toCurrency]}");
+            return $fallbackRates[$toCurrency];
+        }
+        
+        return 1;
+        
+    } catch (\Exception $e) {
+        Log::error("Failed to get USD to {$toCurrency} rate: " . $e->getMessage());
+        return 1;
+    }
 }
 
    protected function updatePreviousRevisions($baseNumber, $newTotal)
@@ -517,7 +604,7 @@ protected function htmlToPlainText($html)
     /**
      * CREDIT USD - APPLE HOLIDAYS Format (USD) - FIXED ADDRESS DISPLAY
      */
-    protected function generateAppleHolidaysInvoiceHTML($invoice, $email)
+    public function generateAppleHolidaysInvoiceHTML($invoice, $email)
     {
         $agentAddress = $this->getFormattedToAddress($invoice->customer_name);
         $voucherNo = $email->tour_ref ?? 'NL' . rand(1000000000, 9999999999);
@@ -765,46 +852,67 @@ protected function htmlToPlainText($html)
         </body>
         </html>';
     }
+public function generateSharmilaInvoiceHTML($invoice, $email, $calculations)
+{
+    $travelDates = $this->getTravelDates($email);
+    $settlementDate = $this->getSettlementDate($email->travel_start_date, false);
     
-    /**
-     * CREDIT INR & NON-CREDIT - SHARMILA Format - FIXED ADDRESS DISPLAY
-     */
-    protected function generateSharmilaInvoiceHTML($invoice, $email, $calculations)
-    {
-        $travelDates = $this->getTravelDates($email);
-        $settlementDate = $this->getSettlementDate($email->travel_start_date, false);
-        
-        $salesId = $email->sales_id ?? 'NA';
-        $fileHandler = $email->file_handler ?? 'NA';
-        
+    $salesId = $email->sales_id ?? 'NA';
+    $fileHandler = $email->file_handler ?? 'NA';
+    
+    // ✅ Define all variables with defaults
+    $totalGuests = 1;
+    $exchangeRate = 0;
+    $costPerPersonINR = 0;
+    $handlingFeePerPersonINR = 0;
+    $totalTourCost = 0;
+    $totalHandlingFee = 0;
+    $subTotal = 0;
+    $cgstAmount = 0;
+    $sgstAmount = 0;
+    $grandTotal = 0;
+    $amountReceived = 0;
+    $balanceDue = 0;
+    
+    // ✅ FIX: Use correct array keys from calculations
+    if ($calculations) {
         $totalGuests = $calculations['total_guests'] ?? 1;
-        $exchangeRate = $calculations['exchange_rate'];
+        $exchangeRate = $calculations['exchange_rate'] ?? 0;
         
-        $netPerPersonINR = $calculations['net_per_person_inr'];
-        $handlingFeePerPersonINR = $calculations['handling_fee_per_person_inr'];
-        $totalTourCost = $calculations['total_tour_cost_inr'];
-        $totalHandlingFee = $calculations['total_handling_fee_inr'];
-        $subTotal = $calculations['sub_total_inr'];
-        $cgstAmount = $calculations['cgst_amount'];
-        $sgstAmount = $calculations['sgst_amount'];
-        $grandTotal = $calculations['final_total_inr'];
-        $amountReceived = 0;
-        $balanceDue = $grandTotal;
-        
-         $agentName = $email->agent_name ?? $invoice->customer_name ?? 'Unknown Customer';
+        // ✅ CORRECT KEYS:
+        // Cost Per Person = Unit Fare (after deducting handling fee)
+        $costPerPersonINR = $calculations['unit_fare_inr'] ?? 0;  // ← FIXED: Use unit_fare_inr
+        $handlingFeePerPersonINR = $calculations['handling_fee_per_person_inr'] ?? 0;
+        $totalTourCost = $calculations['total_amount_inr'] ?? 0;
+        $totalHandlingFee = $calculations['total_handling_fee_inr'] ?? 0;
+        $subTotal = $calculations['sub_total_inr'] ?? 0;
+        $cgstAmount = $calculations['cgst_amount'] ?? 0;
+        $sgstAmount = $calculations['sgst_amount'] ?? 0;
+        $grandTotal = $calculations['final_total_inr'] ?? 0;
+    } else {
+        // ✅ Fallback values when no handling fee
+        $totalGuests = (int)($email->number_of_guests ?? $email->pax_count ?? 1);
+        if ($totalGuests < 1) $totalGuests = 1;
+        $grandTotal = $invoice->grand_total ?? 0;
+    }
     
-    // Get formatted address for the agent
+    $amountReceived = 0;
+    $balanceDue = $grandTotal;
+    
+    $agentName = $email->agent_name ?? $invoice->customer_name ?? 'Unknown Customer';
     $customerAddress = $this->getFormattedToAddress($agentName);
-        
-        // Revision note for Sharmila invoice
-        $revisionNote = '';
-        if ($invoice->is_revision && $invoice->revision_number > 0) {
-            $revisionNote = '<div class="revision-note" style="background-color: #fff3cd; padding: 5px 10px; margin-bottom: 10px; border-left: 4px solid #ffc107; font-size: 8pt;">
-                <strong>⚠️ REVISED INVOICE - Revision ' . $invoice->revision_number . '</strong><br>
-                This is a revised invoice. Please disregard any previous invoices for this booking.
-            </div>';
-        }
-        
+    
+    // Revision note for Sharmila invoice
+    $revisionNote = '';
+    if ($invoice->is_revision && $invoice->revision_number > 0) {
+        $revisionNote = '<div class="revision-note" style="background-color: #fff3cd; padding: 5px 10px; margin-bottom: 10px; border-left: 4px solid #ffc107; font-size: 8pt;">
+            <strong>⚠️ REVISED INVOICE - Revision ' . $invoice->revision_number . '</strong><br>
+            This is a revised invoice. Please disregard any previous invoices for this booking.
+        </div>';
+    }
+    
+    // ✅ If no handling fee, show simple invoice
+    if (!$calculations) {
         return '
         <!DOCTYPE html>
         <html>
@@ -887,14 +995,6 @@ protected function htmlToPlainText($html)
                     border-left: 3px solid #ffc107;
                     font-size: 8pt;
                 }
-                .warning-text {
-                    font-size: 6.5pt;
-                    color: #856404;
-                    background-color: #fff3cd;
-                    padding: 6px;
-                    margin-top: 8px;
-                    border-radius: 3px;
-                }
             </style>
         </head>
         <body>
@@ -912,7 +1012,6 @@ protected function htmlToPlainText($html)
                 
                 ' . $revisionNote . '
                 
-                <!-- To Section with address (only once, no separate Address label) -->
                 <div class="to-section">
                     <strong>To:</strong> ' . nl2br(htmlspecialchars($customerAddress)) . '
                 </div>
@@ -921,36 +1020,30 @@ protected function htmlToPlainText($html)
                     <span>INVOICE</span>
                 </div>
                 
-                <!-- NO separate Address: section here -->
-                
                <table class="info-table">
-    <tr><td class="info-label">Invoice No.:</td><td><strong>' . $invoice->invoice_number . '</strong></td>
-        <td class="info-label">Ref ID.:</td><td>' . htmlspecialchars($email->tour_ref ?? '-') . '</td>
-    </tr>
-    <tr><td class="info-label">File Handler:</td><td>' . strtoupper($fileHandler) . '</td>
-        <td class="info-label">Sales Person:</td><td>' . strtoupper($invoice->sales_person ?? $salesId) . '</td>
-    </tr>
-    <tr><td class="info-label">Date:</td><td>' . date('d/m/Y', strtotime($invoice->invoice_date)) . '</td>
-        <td class="info-label">Agent ID:</td><td>' . htmlspecialchars($email->reference_no ?? '-') . '</td>
-    </tr>
-    <tr><td class="info-label">GST NO.:</td><td>' . ($invoice->gst_number ?: 'NA') . '</td>
-        <td class="info-label">Guest Name:</td><td>' . htmlspecialchars($email->guest_name ?? '-') . '</td>
-    </tr>
-</table>
+                    <tr><td class="info-label">Invoice No.:</td><td><strong>' . $invoice->invoice_number . '</strong></td>
+                        <td class="info-label">Ref ID.:</td><td>' . htmlspecialchars($email->tour_ref ?? '-') . '</td>
+                    </tr>
+                    <tr><td class="info-label">File Handler:</td><td>' . strtoupper($fileHandler) . '</td>
+                        <td class="info-label">Sales Person:</td><td>' . strtoupper($invoice->sales_person ?? $salesId) . '</td>
+                    </tr>
+                    <tr><td class="info-label">Date:</td><td>' . date('d/m/Y', strtotime($invoice->invoice_date)) . '</td>
+                        <td class="info-label">Agent ID:</td><td>' . htmlspecialchars($email->reference_no ?? '-') . '</td>
+                    </tr>
+                    <tr><td class="info-label">GST NO.:</td><td>' . ($invoice->gst_number ?: 'NA') . '</td>
+                        <td class="info-label">Guest Name:</td><td>' . htmlspecialchars($email->guest_name ?? '-') . '</td>
+                    </tr>
+                </table>
                 
                 <table class="items-table">
                     <thead><tr><th>Description</th><th>Unit Fare</th><th>Discount</th><th>Quantity</th><th class="amount">Amount</th></tr></thead>
                     <tbody>
-                        <tr><td>Cost Per Person</td><td>INR ' . number_format($netPerPersonINR, 2) . '</td><td>0</td><td>' . $totalGuests . '</td><td class="amount">INR ' . number_format($totalTourCost, 2) . '</td></tr>
-                        <tr><td>Handling Fee</td><td>INR ' . number_format($handlingFeePerPersonINR, 2) . '</td><td>0</td><td>' . $totalGuests . '</td><td class="amount">INR ' . number_format($totalHandlingFee, 2) . '</td></tr>
+                        <tr><td>Total Tour Cost</td><td></td><td>0</td><td>' . $totalGuests . '</td><td class="amount">INR ' . number_format($grandTotal, 2) . '</td></tr>
                     </tbody>
                 </table>
                 
                 <div class="total-section">
                     <table class="total-table">
-                        <tr><td class="label-cell">Sub Total :</td><td class="amount-cell">INR ' . number_format($subTotal, 2) . '</td></tr>
-                        <tr><td class="label-cell">CGST 9.00% :</td><td class="amount-cell">INR ' . number_format($cgstAmount, 2) . '</td></tr>
-                        <tr><td class="label-cell">SGST 9.00% :</td><td class="amount-cell">INR ' . number_format($sgstAmount, 2) . '</td></tr>
                         <tr style="background-color: #f0f0f0; font-weight: bold;"><td class="label-cell">Total :</td><td class="amount-cell">INR ' . number_format($grandTotal, 2) . '</td></tr>
                         <tr><td class="label-cell">Amount Received :</td><td class="amount-cell">INR ' . number_format($amountReceived, 2) . '</td></tr>
                         <tr style="font-weight: bold;"><td class="label-cell">Balance :</td><td class="amount-cell">INR ' . number_format($balanceDue, 2) . '</td></tr>
@@ -975,14 +1068,11 @@ protected function htmlToPlainText($html)
                     Bank Address: NO 199, DARSHINI TOWER, VAIGAI COLONY, ANNA NAGAR, 625020
                 </div>
                 
-                <div class="printed-by">
-                    Auto Generated<br>
-                    Xe: ' . number_format($exchangeRate - 1, 2) . ' (+1) = ' . $exchangeRate . '
-                </div>
+                <div class="printed-by">Auto Generated</div>
                 
                <div style="background: #fff3cd; padding: 6px 10px; margin: 8px 0; border-left: 4px solid #ffc107; font-size: 7pt; line-height: 1.4;">
-    <strong>Note:</strong> Cash deposit should not exceed ₹49,000 per transaction.
-</div>
+                    <strong>Note:</strong> Cash deposit should not exceed ₹49,000 per transaction.
+                </div>
                 
                 <div class="footer">
                     This is a computer generated document - no signature required
@@ -992,6 +1082,197 @@ protected function htmlToPlainText($html)
         </html>';
     }
     
+    // ✅ Full version with handling fee - USING CORRECT KEYS
+    return '
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="utf-8">
+        <title>INVOICE - ' . $invoice->invoice_number . '</title>
+        <style>
+            @page { margin: 12px; size: A4; }
+            body {
+                font-family: "DejaVu Sans", Arial, sans-serif;
+                margin: 0;
+                padding: 0;
+                background: #fff;
+                font-size: 9pt;
+            }
+            .invoice-container { max-width: 100%; margin: 0 auto; background: white; }
+            .header {
+                text-align: center;
+                margin-bottom: 10px;
+                padding-bottom: 8px;
+                border-bottom: 1px solid #ddd;
+            }
+            .company-name { font-size: 14pt; font-weight: bold; color: #1a237e; margin-bottom: 3px; }
+            .company-address { font-size: 7pt; color: #333; line-height: 1.3; }
+            .company-details { font-size: 7pt; color: #333; margin-top: 3px; }
+            .invoice-title { text-align: center; margin: 10px 0 8px 0; }
+            .invoice-title span { font-size: 14pt; font-weight: bold; text-decoration: underline; }
+            .to-section { margin: 8px 0; line-height: 1.3; }
+            .to-section strong { font-weight: bold; }
+            .info-table {
+                width: 100%;
+                border-collapse: collapse;
+                margin: 8px 0;
+                font-size: 8pt;
+            }
+            .info-table td { padding: 3px 5px; vertical-align: top; }
+            .info-label { font-weight: bold; width: 90px; }
+            .items-table {
+                width: 100%;
+                border-collapse: collapse;
+                margin: 10px 0;
+                font-size: 8pt;
+            }
+            .items-table th {
+                background-color: #1a237e;
+                color: white;
+                padding: 6px 5px;
+                text-align: left;
+                border: 1px solid #1a237e;
+            }
+            .items-table td { padding: 6px 5px; border: 1px solid #ddd; }
+            .amount { text-align: right; }
+            .total-section { margin-top: 8px; margin-bottom: 8px; }
+            .total-table { width: 100%; border-collapse: collapse; }
+            .total-table td { padding: 3px 8px; font-size: 8pt; }
+            .total-table .label-cell { text-align: left; }
+            .total-table .amount-cell { text-align: right; }
+            .settlement-text { margin: 10px 0; font-size: 9pt; font-weight: bold; }
+            .payment-details {
+                background: #f5f5f5;
+                padding: 8px 10px;
+                margin: 10px 0;
+                font-size: 7pt;
+                line-height: 1.4;
+            }
+            .payment-details strong { font-size: 8pt; }
+            .footer {
+                margin-top: 10px;
+                font-size: 6pt;
+                text-align: center;
+                color: #666;
+                border-top: 1px solid #ddd;
+                padding-top: 6px;
+            }
+            .printed-by { margin: 6px 0; font-size: 8pt; }
+            .remark {
+                margin: 8px 0;
+                padding: 6px 8px;
+                background: #fff3cd;
+                border-left: 3px solid #ffc107;
+                font-size: 8pt;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="invoice-container">
+            <div class="header">
+                <div class="company-name">SHARMILA TOURS AND TRAVELS</div>
+                <div class="company-address">
+                    Shop No : 1st Floor, 10, Venkatraman Road, Kamala Second Street, Chinna Chokkikulam, Madurai - 625002
+                </div>
+                <div class="company-details">
+                    Tel : +91 95852 29262 | Email : accounts@aahaas.com<br>
+                    Services Tax : ADVF4429D | GSTIN : 33ADVFS4429D1ZV
+                </div>
+            </div>
+            
+            ' . $revisionNote . '
+            
+            <div class="to-section">
+                <strong>To:</strong> ' . nl2br(htmlspecialchars($customerAddress)) . '
+            </div>
+            
+            <div class="invoice-title">
+                <span>INVOICE</span>
+            </div>
+            
+           <table class="info-table">
+                <tr><td class="info-label">Invoice No.:</td><td><strong>' . $invoice->invoice_number . '</strong></td>
+                    <td class="info-label">Ref ID.:</td><td>' . htmlspecialchars($email->tour_ref ?? '-') . '</td>
+                </tr>
+                <tr><td class="info-label">File Handler:</td><td>' . strtoupper($fileHandler) . '</td>
+                    <td class="info-label">Sales Person:</td><td>' . strtoupper($invoice->sales_person ?? $salesId) . '</td>
+                </tr>
+                <tr><td class="info-label">Date:</td><td>' . date('d/m/Y', strtotime($invoice->invoice_date)) . '</td>
+                    <td class="info-label">Agent ID:</td><td>' . htmlspecialchars($email->reference_no ?? '-') . '</td>
+                </tr>
+                <tr><td class="info-label">GST NO.:</td><td>' . ($invoice->gst_number ?: 'NA') . '</td>
+                    <td class="info-label">Guest Name:</td><td>' . htmlspecialchars($email->guest_name ?? '-') . '</td>
+                </tr>
+            </table>
+            
+            <table class="items-table">
+                <thead><tr><th>Description</th><th>Unit Fare</th><th>Discount</th><th>Quantity</th><th class="amount">Amount</th></tr></thead>
+                <tbody>
+                    <!-- ✅ FIXED: Cost Per Person uses unit_fare_inr (after deducting handling fee) -->
+                    <!-- Unit Fare = $346.11 - $5 = $341.11 -->
+                    <!-- Amount = Unit Fare × Quantity = $341.11 × 2 = $682.22 -->
+                    <tr>
+                        <td>Cost Per Person</td>
+                        <td>INR ' . number_format($costPerPersonINR, 2) . '</td>
+                        <td>0</td>
+                        <td>' . $totalGuests . '</td>
+                        <td class="amount">INR ' . number_format($costPerPersonINR * $totalGuests, 2) . '</td>
+                    </tr>
+                    <tr>
+                        <td>Handling Fee</td>
+                        <td>INR ' . number_format($handlingFeePerPersonINR, 2) . '</td>
+                        <td>0</td>
+                        <td>' . $totalGuests . '</td>
+                        <td class="amount">INR ' . number_format($totalHandlingFee, 2) . '</td>
+                    </tr>
+                </tbody>
+            </table>
+            
+            <div class="total-section">
+                <table class="total-table">
+                    <tr><td class="label-cell">Sub Total :</td><td class="amount-cell">INR ' . number_format($subTotal, 2) . '</td></tr>
+                    <tr><td class="label-cell">CGST 9.00% :</td><td class="amount-cell">INR ' . number_format($cgstAmount, 2) . '</td></tr>
+                    <tr><td class="label-cell">SGST 9.00% :</td><td class="amount-cell">INR ' . number_format($sgstAmount, 2) . '</td></tr>
+                    <tr style="background-color: #f0f0f0; font-weight: bold;"><td class="label-cell">Total :</td><td class="amount-cell">INR ' . number_format($grandTotal, 2) . '</td></tr>
+                    <tr><td class="label-cell">Amount Received :</td><td class="amount-cell">INR ' . number_format($amountReceived, 2) . '</td></tr>
+                    <tr style="font-weight: bold;"><td class="label-cell">Balance :</td><td class="amount-cell">INR ' . number_format($balanceDue, 2) . '</td></tr>
+                </table>
+            </div>
+            
+            <div class="remark">
+                <strong>Travel Date:</strong> ' . ($travelDates ?: 'No travel dates specified') . '
+            </div>
+            
+            <div class="settlement-text">
+                Please settle the invoice on or before ' . $settlementDate . '
+            </div>
+            
+            <div class="payment-details">
+                <strong>ACCOUNT DETAILS</strong><br>
+                ACCOUNT NAME: SHARMILA TOURS AND TRAVELS<br>
+                ACCOUNT NO: 056205002744<br>
+                BANK: ICICI BANK LTD<br>
+                BRANCH: TEPPAKULAM, MADURAI BRANCH<br>
+                IFSC CODE: ICIC0000562<br>
+                Bank Address: NO 199, DARSHINI TOWER, VAIGAI COLONY, ANNA NAGAR, 625020
+            </div>
+            
+            <div class="printed-by">
+                Auto Generated<br>
+                Xe: ' . number_format($exchangeRate - 1, 2) . ' (+1) = ' . $exchangeRate . '
+            </div>
+            
+           <div style="background: #fff3cd; padding: 6px 10px; margin: 8px 0; border-left: 4px solid #ffc107; font-size: 7pt; line-height: 1.4;">
+                <strong>Note:</strong> Cash deposit should not exceed ₹49,000 per transaction.
+            </div>
+            
+            <div class="footer">
+                This is a computer generated document - no signature required
+            </div>
+        </div>
+    </body>
+    </html>';
+}
     protected function getAgentAddress($agentName)
     {
         return $this->getFormattedToAddress($agentName);
@@ -1287,9 +1568,9 @@ protected function htmlToPlainText($html)
             $html = $this->generateSharmilaInvoiceHTML($invoice, $email, $calculations);
         }
         
-        $pdf = Pdf::loadHTML($html);
-        $filename = "invoices/{$invoice->invoice_number}.pdf";
-        $pdf->save(storage_path("app/public/{$filename}"));
+       $pdf = Pdf::loadHTML($html);
+    $filename = "invoices/{$newInvoiceNumber}.pdf";  // ← No slashes
+    $pdf->save(storage_path("app/public/{$filename}"));
         
         $invoice->file_path = $filename;
         $invoice->save();
@@ -1341,7 +1622,6 @@ protected function sendInvoiceEmail($invoice)
             $emailType = 'non_credit';
         }
         
-        // Send email
         Mail::to('kevinraj@aahaas.com')
             ->cc('raja.lakshmi@aahaas.com')
             ->send(new InvoiceMail($invoice, $emailType));
@@ -1400,14 +1680,17 @@ protected function convertToINR($amount, $currency)
     
     switch ($currency) {
         case 'SGD':
-            $rate = $exchangeService->getSgdToInrRate();
+            $rate = $exchangeService->getSgdToInrRate();  // SGD → INR with +1
+            Log::info("🔄 Converting SGD to INR: {$amount} SGD × {$rate} = " . ($amount * $rate));
             break;
         case 'MYR':
-            $rate = $exchangeService->getMyrToInrRate();
+            $rate = $exchangeService->getMyrToInrRate();  // MYR → INR with +1
+            Log::info("🔄 Converting MYR to INR: {$amount} MYR × {$rate} = " . ($amount * $rate));
             break;
         case 'USD':
         default:
-            $rate = $exchangeService->getUsdToInrRate();
+            $rate = $exchangeService->getUsdToInrRate();  // USD → INR with +1
+            Log::info("🔄 Converting USD to INR: {$amount} USD × {$rate} = " . ($amount * $rate));
             break;
     }
     
