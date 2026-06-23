@@ -261,6 +261,7 @@ protected function saveEmail($message)
             $agentName = trim($agentName);
         }
         
+        // ✅ EXTRACT SALES PERSON
         $salesPerson = $this->extractField($plainText, 'Sales Person');
         if ($salesPerson) {
             $salesPerson = trim($salesPerson);
@@ -274,13 +275,87 @@ protected function saveEmail($message)
         $travelStart = $travelDates['start'];
         $travelEnd = $travelDates['end'];
         
-        // Extract Total Tour Cost
+        // ✅ FIX: ONLY extract Total Tour Cost with better patterns
         $totalAmount = null;
         $currency = 'USD';
         
         Log::info("🔍 Extracting Total Tour Cost from email: " . $subject);
+        Log::info("📄 Plain text preview: " . substr($plainText, 0, 500));
         
-        // ... (your existing amount extraction code) ...
+        // ✅ PATTERN 1: Total Tour Cost with RM (Malaysia) - MUST CHECK FIRST
+        // Matches: "Total Tour Cost | RM 3,197.00" or "Total Tour Cost RM 3,197.00"
+        if (preg_match('/Total\s+Tour\s+Cost\s*[:\|]?\s*RM\s*([0-9,]+\.?[0-9]*)/i', $plainText, $match)) {
+            $totalAmount = floatval(str_replace(',', '', $match[1]));
+            $currency = 'MYR';
+            Log::info("✅ Extracted Total Tour Cost (MYR): RM {$totalAmount}");
+        }
+        // ✅ PATTERN 2: Total Tour Cost with MYR
+        elseif (preg_match('/Total\s+Tour\s+Cost\s*[:\|]?\s*MYR\s*([0-9,]+\.?[0-9]*)/i', $plainText, $match)) {
+            $totalAmount = floatval(str_replace(',', '', $match[1]));
+            $currency = 'MYR';
+            Log::info("✅ Extracted Total Tour Cost (MYR): MYR {$totalAmount}");
+        }
+        // ✅ PATTERN 3: Total Tour Cost with S$ (Singapore)
+        elseif (preg_match('/Total\s+Tour\s+Cost\s*[:\|]?\s*S\$\s*([0-9,]+\.?[0-9]*)/i', $plainText, $match)) {
+            $totalAmount = floatval(str_replace(',', '', $match[1]));
+            $currency = 'SGD';
+            Log::info("✅ Extracted Total Tour Cost (SGD): S$ {$totalAmount}");
+        }
+        // ✅ PATTERN 4: Total Tour Cost with SGD
+        elseif (preg_match('/Total\s+Tour\s+Cost\s*[:\|]?\s*SGD\s*([0-9,]+\.?[0-9]*)/i', $plainText, $match)) {
+            $totalAmount = floatval(str_replace(',', '', $match[1]));
+            $currency = 'SGD';
+            Log::info("✅ Extracted Total Tour Cost (SGD): SGD {$totalAmount}");
+        }
+        // ✅ PATTERN 5: Total Tour Cost with $ (USD) - but check if it's Singapore (has S$)
+        elseif (preg_match('/Total\s+Tour\s+Cost\s*[:\|]?\s*\$?\s*([0-9,]+\.?[0-9]*)/i', $plainText, $match)) {
+            $totalAmount = floatval(str_replace(',', '', $match[1]));
+            // Check if this is Singapore (look for S$ or Singapore in text)
+            if (stripos($plainText, 'S$') !== false || stripos($plainText, 'SGD') !== false || stripos($plainText, 'Singapore') !== false) {
+                $currency = 'SGD';
+            } else {
+                $currency = 'USD';
+            }
+            Log::info("✅ Extracted Total Tour Cost: {$currency} {$totalAmount}");
+        }
+        // ✅ PATTERN 6: Total Tour Cost with currency code (generic)
+        elseif (preg_match('/Total\s+Tour\s+Cost\s*[:\|]?\s*([A-Z]{3})?\s*([0-9,]+\.?[0-9]*)/i', $plainText, $match)) {
+            $totalAmount = floatval(str_replace(',', '', $match[2]));
+            if (isset($match[1]) && !empty($match[1])) {
+                $currency = strtoupper($match[1]);
+            } else {
+                $currency = $this->detectCurrencyFromText($plainText);
+            }
+            Log::info("✅ Extracted Total Tour Cost (generic): {$currency} {$totalAmount}");
+        }
+        
+        // ✅ If still no amount, try ANY amount with currency symbols
+        if (!$totalAmount) {
+            // Try RM (Malaysia)
+            if (preg_match('/RM\s*([0-9,]+\.?[0-9]*)/', $plainText, $match)) {
+                $totalAmount = floatval(str_replace(',', '', $match[1]));
+                $currency = 'MYR';
+                Log::info("✅ Found RM amount: {$currency} {$totalAmount}");
+            }
+            // Try S$ (Singapore)
+            elseif (preg_match('/S\$\s*([0-9,]+\.?[0-9]*)/', $plainText, $match)) {
+                $totalAmount = floatval(str_replace(',', '', $match[1]));
+                $currency = 'SGD';
+                Log::info("✅ Found S$ amount: {$currency} {$totalAmount}");
+            }
+            // Try SGD
+            elseif (preg_match('/SGD\s*([0-9,]+\.?[0-9]*)/i', $plainText, $match)) {
+                $totalAmount = floatval(str_replace(',', '', $match[1]));
+                $currency = 'SGD';
+                Log::info("✅ Found SGD amount: {$currency} {$totalAmount}");
+            }
+            // Try USD
+            elseif (preg_match('/\$\s*([0-9,]+\.?[0-9]*)/', $plainText, $match)) {
+                $totalAmount = floatval(str_replace(',', '', $match[1]));
+                $currency = 'USD';
+                Log::info("✅ Found USD amount: {$currency} {$totalAmount}");
+            }
+        }
         
         // Extract number of guests
         $numberOfGuests = null;
@@ -300,22 +375,7 @@ protected function saveEmail($message)
         $destination = $this->extractDestination($plainText, $subject);
         $classification = $this->agentClassifier->classify($plainText, $fromEmail, $subject, $agentName);
         
-        // ✅ CRITICAL: Check if email already exists with same tour_ref and invoice_number
-        $existingEmail = IncomingEmail::where('tour_ref', $tourRef)
-            ->where('invoice_number', $invoiceNumber)
-            ->where('tour_ref', '!=', 'NA')
-            ->where('invoice_number', '!=', 'NA')
-            ->orderBy('received_at', 'desc')
-            ->first();
-        
-        // ✅ Check for exact message_id duplicate
-        $existingByMessageId = IncomingEmail::where('message_id', $message['id'])->first();
-        
-        if ($existingByMessageId) {
-            Log::info("⏭️ Email already exists with same message_id: " . $subject);
-            return true;
-        }
-        
+        // ✅ Build email data with ALL fields including sales_person
         $emailData = [
             'message_id' => $message['id'],
             'from_email' => $fromEmail ?: 'unknown@example.com',
@@ -343,80 +403,21 @@ protected function saveEmail($message)
             'processing_status' => 'processed',
             'is_tour_confirmation' => $isTourConfirmation,
             'has_attachments' => $message['hasAttachments'] ?? false,
-            'sales_person' => $salesPerson,
+            'sales_person' => $salesPerson, // ✅ ADDED SALES PERSON
         ];
         
-        // ✅ If existing email found with same tour_ref and invoice_number
-        if ($existingEmail && $existingEmail->message_id != $message['id']) {
-            Log::info("🔄 Found existing email with same Tour Ref: {$tourRef} and Invoice: {$invoiceNumber}");
-            
-            // ✅ Compare fields to check if anything changed
-            $hasChanges = false;
-            $changes = [];
-            
-            $fieldsToCompare = [
-                'agent_name' => $agentName,
-                'guest_name' => $guestName,
-                'file_handler' => $fileHandler,
-                'travel_start_date' => $travelStart,
-                'travel_end_date' => $travelEnd,
-                'number_of_guests' => $numberOfGuests,
-                'pax_count' => $paxCount,
-                'destination' => $destination,
-                'total_amount' => $totalAmount,
-                'currency' => $currency,
-                'sales_person' => $salesPerson,
-                'reference_no' => $agentReferenceNo,
-            ];
-            
-            foreach ($fieldsToCompare as $field => $newValue) {
-                $oldValue = $existingEmail->$field;
-                
-                // Convert both to string for comparison
-                $oldStr = (string)$oldValue;
-                $newStr = (string)$newValue;
-                
-                if ($oldStr !== $newStr) {
-                    $hasChanges = true;
-                    $changes[$field] = [
-                        'old' => $oldStr,
-                        'new' => $newStr
-                    ];
-                    Log::info("   🔄 Field '{$field}' changed: '{$oldStr}' → '{$newStr}'");
-                }
-            }
-            
-            if ($hasChanges) {
-                Log::info("📝 Changes detected! Creating revision invoice...");
-                Log::info("   Changes: " . json_encode($changes, JSON_PRETTY_PRINT));
-                
-                // ✅ Create revision email record with updated data
-                $email = IncomingEmail::create($emailData);
-                Log::info("💾 Created REVISION email: " . $subject . " (ID: " . $email->id . ")");
-                
-                // ✅ Generate revision invoice
-                if ($isTourConfirmation && $tourRef != 'NA' && $invoiceNumber != 'NA') {
-                    $this->autoGenerateRevisionInvoice($email, $existingEmail);
-                }
-                
-                return true;
-            } else {
-                Log::info("✅ No changes detected for email: " . $subject . " - Skipping duplicate");
-                return true;
-            }
-        }
+        Log::info("💾 FINAL - Total amount: {$currency} {$totalAmount} for: " . $subject);
+        Log::info("💾 Sales Person: " . ($salesPerson ?: 'NULL'));
         
-        // ✅ No existing email found - Create new record
         try {
             $email = IncomingEmail::create($emailData);
-            Log::info("💾 Saved NEW email to database: " . $subject . " (ID: " . $email->id . ")");
+            Log::info("💾 Saved email to database: " . $subject . " (ID: " . $email->id . ")");
         } catch (\Illuminate\Database\QueryException $qe) {
             Log::error('❌ Database error: ' . $qe->getMessage() . ' - Subject: ' . $subject);
             Log::error('   Data: ' . json_encode($emailData, JSON_PARTIAL_OUTPUT_ON_ERROR));
             return false;
         }
         
-        // ✅ Auto-generate invoice for new email
         if ($isTourConfirmation && $tourRef != 'NA' && $invoiceNumber != 'NA') {
             $this->autoGenerateInvoice($email);
         }

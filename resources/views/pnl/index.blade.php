@@ -234,7 +234,7 @@
                             <th>#</th>
                             <th>Date</th>
                             <th>From</th>
-                            <th>Vendor</th>
+                            <th>Guest Name</th>
                             <th>Subject</th>
                             <th>Tour Ref</th>
                             <th>Invoice #</th>

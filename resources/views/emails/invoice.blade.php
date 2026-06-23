@@ -113,16 +113,18 @@
                 <td class="value">{{ $invoice->tour_ref }}</td>
             </tr>
             <tr>
-                <td class="label">Amount</td>
-                <td class="value">
-                    <strong>
-                        @if($displayCurrency == 'USD')
-                            ${{ number_format($invoice->total_amount, 2) }}
-                        @else
-                            INR {{ number_format($invoice->grand_total, 2) }}
-                        @endif
-                    </strong>
-                </td>
+              <tr>
+    <td class="label">Amount</td>
+    <td class="value">
+        <strong>
+           @if($displayCurrency == 'USD')
+    ${{ number_format($invoice->total_amount, 2) }}
+@else
+    INR {{ number_format($invoice->grand_total, 2) }}
+@endif
+        </strong>
+    </td>
+</tr>
             </tr>
             <tr>
                 <td class="label">Date</td>
