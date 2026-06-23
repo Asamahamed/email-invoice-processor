@@ -357,20 +357,56 @@ protected function saveEmail($message)
             }
         }
         
-        // Extract number of guests
-        $numberOfGuests = null;
-        if (preg_match('/No\. of Guests?[:\s]*(\d+)\s*Adults?/i', $plainText, $match)) {
-            $numberOfGuests = intval($match[1]);
-        } elseif (preg_match('/No\. of Guests?[:\s]*(\d+)/i', $plainText, $match)) {
-            $numberOfGuests = intval($match[1]);
-        }
+     // Extract number of guests - FIX to count both Adults and Children
+$numberOfGuests = null;
+$adults = 0;
+$children = 0;
+
+// ✅ Pattern 1: "No. of Guests | 4 Adults | 3 CWB | 0 CNB"
+if (preg_match('/No\.?\s+of\s+Guests?\s*[:\|]\s*(\d+)\s+Adults?\s*[|\s]*(\d+)\s+(CWB|CNB|CHILD)/i', $plainText, $match)) {
+    $adults = intval($match[1]);
+    $children = intval($match[2]);
+    $numberOfGuests = $adults + $children;
+    Log::info("✅ Extracted guests: {$adults} Adults + {$children} Children = {$numberOfGuests} Total");
+}
+// ✅ Pattern 2: "4 Adults | 3 CWB" (no "No. of Guests" prefix)
+elseif (preg_match('/(\d+)\s+Adults?\s*[|\s]*(\d+)\s+(CWB|CNB|CHILD)/i', $plainText, $match)) {
+    $adults = intval($match[1]);
+    $children = intval($match[2]);
+    $numberOfGuests = $adults + $children;
+    Log::info("✅ Extracted guests (pattern 2): {$adults} Adults + {$children} Children = {$numberOfGuests} Total");
+}
+// ✅ Pattern 3: Just "4 Adults | 3 CWB" with pipe
+elseif (preg_match('/(\d+)\s+Adults?\s*\|\s*(\d+)\s+(CWB|CNB)/i', $plainText, $match)) {
+    $adults = intval($match[1]);
+    $children = intval($match[2]);
+    $numberOfGuests = $adults + $children;
+    Log::info("✅ Extracted guests (pipe format): {$adults} Adults + {$children} Children = {$numberOfGuests} Total");
+}
+// ✅ Pattern 4: Old format - just "No. of Guests: 4"
+elseif (preg_match('/No\.?\s+of\s+Guests?\s*[:\s]*(\d+)/i', $plainText, $match)) {
+    $numberOfGuests = intval($match[1]);
+    Log::info("✅ Extracted guests (old format): {$numberOfGuests}");
+}
+// ✅ Pattern 5: Count total from "X Adults | Y CWB | Z CNB"
+elseif (preg_match('/(\d+)\s+Adults?\s*[|\s]*(\d+)\s+CWB\s*[|\s]*(\d+)\s+CNB/i', $plainText, $match)) {
+    $adults = intval($match[1]);
+    $cwb = intval($match[2]);
+    $cnb = intval($match[3]);
+    $numberOfGuests = $adults + $cwb + $cnb;
+    Log::info("✅ Extracted guests (all types): {$adults} Adults + {$cwb} CWB + {$cnb} CNB = {$numberOfGuests} Total");
+}
         
-        $paxCount = null;
-        if (preg_match('/No\. of Adult[:\s]*(\d+)/i', $plainText, $match)) {
-            $paxCount = intval($match[1]);
-        } elseif (preg_match('/(\d+)\s*Adults?/i', $plainText, $match)) {
-            $paxCount = intval($match[1]);
-        }
+     // Extract PAX count - should count ALL guests (Adults + Children)
+$paxCount = null;
+if ($numberOfGuests) {
+    $paxCount = $numberOfGuests;
+    Log::info("✅ PAX Count set to total guests: {$paxCount}");
+} elseif (preg_match('/No\.?\s+of\s+Adult\s*[:\s]*(\d+)/i', $plainText, $match)) {
+    $paxCount = intval($match[1]);
+} elseif (preg_match('/(\d+)\s+Adults?/i', $plainText, $match)) {
+    $paxCount = intval($match[1]);
+}
         
         $destination = $this->extractDestination($plainText, $subject);
         $classification = $this->agentClassifier->classify($plainText, $fromEmail, $subject, $agentName);
