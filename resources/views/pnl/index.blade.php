@@ -254,7 +254,12 @@
                                         <label for="record_{{ $record->id }}"></label>
                                     </div>
                                 </td>
-                                <td><span class="row-number">{{ $record->sno ?? $loop->iteration }}</span></td>
+                                <td>
+                                    <span class="row-number">
+                                        {{ $loop->iteration }}
+                                    </span>
+                                </td>
+                                <td>
                                 <td>
                                     <div class="date-cell">
                                         <span class="date-main">{{ $record->received_at->format('d/m/Y') }}</span>
@@ -369,8 +374,8 @@
 
     <style>
         /* ============================================
-               PnL Dashboard - Professional UI
-               ============================================ */
+                   PnL Dashboard - Professional UI
+                   ============================================ */
 
         /* Container */
         .pnl-container {
@@ -380,8 +385,8 @@
         }
 
         /* ============================================
-               HEADER
-               ============================================ */
+                   HEADER
+                   ============================================ */
         .pnl-header {
             background: linear-gradient(135deg, #0f172a 0%, #1e293b 50%, #0f172a 100%);
             border-radius: 16px;
@@ -454,8 +459,8 @@
         }
 
         /* ============================================
-               BUTTONS
-               ============================================ */
+                   BUTTONS
+                   ============================================ */
         .btn-pnl {
             display: inline-flex;
             align-items: center;
@@ -531,8 +536,8 @@
         }
 
         /* ============================================
-               STATS CARDS
-               ============================================ */
+                   STATS CARDS
+                   ============================================ */
         .stats-grid {
             display: grid;
             grid-template-columns: repeat(4, 1fr);
@@ -617,8 +622,8 @@
         }
 
         /* ============================================
-               FILTER SECTION
-               ============================================ */
+                   FILTER SECTION
+                   ============================================ */
         .filter-section {
             margin-bottom: 1.25rem;
         }
@@ -737,8 +742,8 @@
         }
 
         /* ============================================
-               BULK ACTIONS
-               ============================================ */
+                   BULK ACTIONS
+                   ============================================ */
         .bulk-actions {
             display: flex;
             justify-content: space-between;
@@ -774,8 +779,8 @@
         }
 
         /* ============================================
-               TABLE
-               ============================================ */
+                   TABLE
+                   ============================================ */
         .table-card {
             background: #fff;
             border-radius: 14px;
@@ -1051,8 +1056,8 @@
         }
 
         /* ============================================
-               PAGINATION
-               ============================================ */
+                   PAGINATION
+                   ============================================ */
         .pagination-wrapper {
             padding: 1rem 1.5rem;
             border-top: 1px solid #e8edf2;
@@ -1111,8 +1116,8 @@
         }
 
         /* ============================================
-               EMPTY STATE
-               ============================================ */
+                   EMPTY STATE
+                   ============================================ */
         .empty-state {
             text-align: center;
             padding: 4rem 2rem !important;
@@ -1138,8 +1143,8 @@
         }
 
         /* ============================================
-               MODAL
-               ============================================ */
+                   MODAL
+                   ============================================ */
         .modal-header {
             background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
             color: #fff;
@@ -1160,8 +1165,8 @@
         }
 
         /* ============================================
-               RESPONSIVE
-               ============================================ */
+                   RESPONSIVE
+                   ============================================ */
         @media (max-width: 1200px) {
             .stats-grid {
                 grid-template-columns: repeat(2, 1fr);
@@ -1341,8 +1346,8 @@
         }
 
         /* ============================================
-               DROPDOWN
-               ============================================ */
+                   DROPDOWN
+                   ============================================ */
         .dropdown-menu {
             border: 1px solid #e8edf2;
             border-radius: 10px;
@@ -1368,8 +1373,8 @@
         }
 
         /* ============================================
-               SCROLLBAR
-               ============================================ */
+                   SCROLLBAR
+                   ============================================ */
         .table-responsive::-webkit-scrollbar {
             height: 6px;
         }
@@ -1389,8 +1394,8 @@
         }
 
         /* ============================================
-       PAGINATION
-       ============================================ */
+           PAGINATION
+           ============================================ */
         .pagination-wrapper {
             padding: 1rem 1.5rem;
             border-top: 1px solid #e8edf2;
@@ -1573,7 +1578,7 @@
                     const btn = $(this);
                     const originalHtml = btn.html();
                     btn.html('<i class="fas fa-spinner fa-spin me-1"></i> Processing...').prop('disabled',
-                    true);
+                        true);
 
                     const params = new URLSearchParams(window.location.search);
 

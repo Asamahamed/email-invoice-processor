@@ -13,4 +13,5 @@ Schedule::command('emails:process')->everyFiveMinutes();
 
 // Schedule exchange rate refresh to run daily
 Schedule::command('exchange:refresh')->daily();
+Schedule::command('pnl:fetch')->everyFiveMinutes();
 

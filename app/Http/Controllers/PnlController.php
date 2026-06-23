@@ -205,7 +205,7 @@ public function exportToExcel(Request $request)
         $spreadsheet = new \PhpOffice\PhpSpreadsheet\Spreadsheet();
         $sheet = $spreadsheet->getActiveSheet();
         $sheet->setTitle('PnL Details');
-
+$currencySymbol = $this->getCurrencySymbol($country ?? 'VN');
         // ✅ UPDATED HEADERS WITH CLIENT NAME
         $headers = [
             'A1' => 'S.No', 
@@ -220,7 +220,7 @@ public function exportToExcel(Request $request)
             'J1' => 'Description',
             'K1' => 'Amount (USD)', 
             'L1' => 'Exchange Rate', 
-            'M1' => 'Amount (Local)',
+           'M1' => 'Amount (' . $currencySymbol . ')',
             'N1' => 'Remarks'
         ];
         
@@ -465,20 +465,25 @@ public function updateExcel(Request $request)
     }
 }
 
-/**
- * View Excel file in browser - For specific record or whole country
- */
+// In viewExcel method
 public function viewExcel($country, $id = null)
 {
     try {
         $excelService = new PnLExcelService();
         
-        // If ID is provided, show specific record preview
+        // Get currency symbol for this country
+        $currencySymbols = [
+            'SG' => 'SGD',
+            'MY' => 'MYR',
+            'VN' => 'VND',
+            'LK' => 'LKR',
+        ];
+        $localCurrency = $currencySymbols[$country] ?? 'Local';
+        
         if ($id) {
             $record = PnlRecord::with('items')->findOrFail($id);
             $html = $excelService->getRecordPreview($record);
             
-            // Get record details for title
             $countryNames = [
                 'SG' => 'Singapore',
                 'MY' => 'Malaysia',
@@ -486,11 +491,10 @@ public function viewExcel($country, $id = null)
                 'LK' => 'Sri Lanka'
             ];
             $countryName = $countryNames[$country] ?? $country;
-            $recordTitle = $record->tour_ref ? " - {$record->tour_ref}" : '';
             
-            return view('pnl.excel-preview', compact('html', 'countryName', 'country', 'record'));
+            // ✅ Pass localCurrency to view
+            return view('pnl.excel-preview', compact('html', 'countryName', 'country', 'record', 'localCurrency'));
         } else {
-            // Show full country Excel
             $html = $excelService->getExcelPreview($country);
             
             $countryNames = [
@@ -501,7 +505,8 @@ public function viewExcel($country, $id = null)
             ];
             $countryName = $countryNames[$country] ?? $country;
             
-            return view('pnl.excel-preview', compact('html', 'countryName', 'country'));
+            // ✅ Pass localCurrency to view
+            return view('pnl.excel-preview', compact('html', 'countryName', 'country', 'localCurrency'));
         }
         
     } catch (\Exception $e) {
@@ -597,7 +602,7 @@ public function exportByCountry($country, Request $request)
         $spreadsheet = new \PhpOffice\PhpSpreadsheet\Spreadsheet();
         $sheet = $spreadsheet->getActiveSheet();
         $sheet->setTitle('PnL - ' . $countryName);
-        
+        $currencySymbol = $this->getCurrencySymbol($country ?? 'VN');
         // ✅ UPDATED HEADERS WITH CLIENT NAME
         $headers = [
             'A1' => 'S.No',
@@ -612,7 +617,7 @@ public function exportByCountry($country, Request $request)
             'J1' => 'Description',
             'K1' => 'Amount (USD)',
             'L1' => 'Exchange Rate',
-            'M1' => 'Amount (Local)',
+            'M1' => 'Amount (' . $currencySymbol . ')',
             'N1' => 'Remarks'
         ];
         
@@ -847,7 +852,7 @@ public function exportByCountryApproved($country, Request $request)
         $spreadsheet = new \PhpOffice\PhpSpreadsheet\Spreadsheet();
         $sheet = $spreadsheet->getActiveSheet();
         $sheet->setTitle('PnL - ' . $countryName . ' (Updated)');
-        
+        $currencySymbol = $this->getCurrencySymbol($country ?? 'VN');
         // ✅ UPDATED HEADERS WITH CLIENT NAME
         $headers = [
             'A1' => 'S.No',
@@ -862,7 +867,7 @@ public function exportByCountryApproved($country, Request $request)
             'J1' => 'Description',
             'K1' => 'Amount (USD)',
             'L1' => 'Exchange Rate',
-            'M1' => 'Amount (Local)',
+           'M1' => 'Amount (' . $currencySymbol . ')',
             'N1' => 'Remarks'
         ];
         
@@ -1131,7 +1136,7 @@ public function exportSelected(Request $request)
         $spreadsheet = new \PhpOffice\PhpSpreadsheet\Spreadsheet();
         $sheet = $spreadsheet->getActiveSheet();
         $sheet->setTitle('Selected PnL');
-        
+        $currencySymbol = $this->getCurrencySymbol($country ?? 'VN');
         // Headers
         $headers = [
             'A1' => 'S.No',
@@ -1146,7 +1151,7 @@ public function exportSelected(Request $request)
             'J1' => 'Description',
             'K1' => 'Amount (USD)',
             'L1' => 'Exchange Rate',
-            'M1' => 'Amount (Local)',
+           'M1' => 'Amount (' . $currencySymbol . ')',
             'N1' => 'Remarks'
         ];
         
@@ -1357,5 +1362,21 @@ public function apiItems($id)
         'header' => $record,
         'items' => $record->items
     ]);
+}
+// Add this method to your PnlController class
+
+/**
+ * Get currency symbol for country code
+ */
+private function getCurrencySymbol($countryCode)
+{
+    $symbols = [
+        'LK' => 'LKR',
+        'VN' => 'VND',
+        'SG' => 'SGD',
+        'MY' => 'MYR',
+    ];
+    
+    return $symbols[$countryCode] ?? 'USD';
 }
 }

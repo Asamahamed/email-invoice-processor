@@ -21,6 +21,7 @@ return Application::configure(basePath: dirname(__DIR__))
     ->withSchedule(function (Schedule $schedule) {
         // ✅ Add your schedule here
         $schedule->command('emails:fetch')->everyFiveMinutes();
+         $schedule->command('pnl:fetch')->everyFiveMinutes();
 
          $schedule->command('report:daily --upload')->dailyAt('23:59');
     })->create();

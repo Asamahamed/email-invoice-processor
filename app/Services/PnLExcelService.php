@@ -14,7 +14,21 @@ use PhpOffice\PhpSpreadsheet\Style\Fill;
 
 class PnLExcelService
 {
-    private $exchangeRates = [
+
+    private $currencySymbols = [
+        'LK' => 'LKR',
+        'VN' => 'VND', 
+        'SG' => 'SGD',
+        'MY' => 'MYR',
+    ];
+
+    private $currencyFormats = [
+        'LK' => 'LKR %s',
+        'VN' => 'VND %s',
+        'SG' => 'SGD %s',
+        'MY' => 'MYR %s',
+    ];
+        private $exchangeRates = [
         'LK' => 330,
         'VN' => 25500,
         'SG' => 1.35,
@@ -34,7 +48,7 @@ class PnLExcelService
     'J' => 'Description',
     'K' => 'Amount (USD)',
     'L' => 'Exchange Rate',
-    'M' => 'Amount (Local)',
+    'M' => 'Amount ({currency})',
     'N' => 'Remarks'
 ];
 
@@ -65,7 +79,8 @@ public function processAndUpdateExcel(PnlRecord $record)
         // Build items for Excel from database
         $allItems = [];
         $sno = 1;
-        
+          $countryCode = $record->country_code ?? 'VN';
+        $exchangeRate = $this->exchangeRates[$countryCode] ?? 25500;
         foreach ($items as $item) {
             $remarks = '';
             $itemDetails = json_decode($item->item_details, true);
@@ -108,7 +123,8 @@ public function processAndUpdateExcel(PnlRecord $record)
                 'amount_usd' => $amount,
                 'exchange_rate' => $exchangeRate,
                 'amount_local' => round($amount * $exchangeRate, 2),
-                'remarks' => $remarks
+                'remarks' => $remarks,
+                  'country_code' => $countryCode  
             ];
         }
 
@@ -160,19 +176,28 @@ public function processAndUpdateExcel(PnlRecord $record)
         }
     }
 
-    /**
-     * Format amount for Excel (positive number or brackets for negative)
-     */
-private function formatAmount($amount)
+/**
+ * Format amount for Excel (positive number or brackets for negative)
+ */
+private function formatAmount($amount, $countryCode = null)
 {
     if ($amount >= 0) {
         return number_format($amount, 2);
     }
     return '(' . number_format(abs($amount), 2) . ')';
 }
-    /**
-     * Parse amount from cell (handles bracket format like (250))
-     */
+
+/**
+ * Format amount with currency symbol for display
+ */
+private function formatAmountWithCurrency($amount, $countryCode)
+{
+    $symbol = $this->getCurrencySymbol($countryCode);
+    if ($amount >= 0) {
+        return $symbol . ' ' . number_format($amount, 2);
+    }
+    return $symbol . ' (' . number_format(abs($amount), 2) . ')';
+}
     private function parseAmount($value)
     {
         if (is_numeric($value)) {
@@ -271,11 +296,11 @@ private function addItemsToSpreadsheet($spreadsheet, $items, $tourRef, $invoiceN
     $this->autoSizeColumns($sheet);
 }
 
-    /**
-     * Write a single row to spreadsheet
-     */
-    private function writeRow($sheet, $row, $item, $tourRef, $invoiceNumber)
+private function writeRow($sheet, $row, $item, $tourRef, $invoiceNumber)
 {
+    $countryCode = $item['country_code'] ?? 'VN';
+    $currencySymbol = $this->getCurrencySymbol($countryCode);
+    
     $amount = $item['amount_usd'];
     $localAmount = $item['amount_local'];
     
@@ -285,7 +310,7 @@ private function addItemsToSpreadsheet($spreadsheet, $items, $tourRef, $invoiceN
     $sheet->setCellValue("A{$row}", $item['sno']);
     $sheet->setCellValue("B{$row}", $tourRef ?? '-');
     $sheet->setCellValue("C{$row}", $invoiceNumber ?? '-');
-    $sheet->setCellValue("D{$row}", $item['client_name'] ?? '');  // ✅ NEW
+    $sheet->setCellValue("D{$row}", $item['client_name'] ?? '');
     $sheet->setCellValue("E{$row}", $item['type']);
     $sheet->setCellValue("F{$row}", $item['start_date']);
     $sheet->setCellValue("G{$row}", $item['end_date']);
@@ -294,10 +319,13 @@ private function addItemsToSpreadsheet($spreadsheet, $items, $tourRef, $invoiceN
     $sheet->setCellValue("J{$row}", $item['description']);
     $sheet->setCellValue("K{$row}", $formattedAmount);
     $sheet->setCellValue("L{$row}", $item['exchange_rate']);
-    $sheet->setCellValue("M{$row}", $formattedLocalAmount);
+    
+    // ✅ Format with currency symbol
+    $sheet->setCellValue("M{$row}", $this->formatAmountWithCurrency($localAmount, $countryCode));
+    
     $sheet->setCellValue("N{$row}", $item['remarks']);
     
-    // Color coding (update ranges)
+    // Color coding
     $colors = [
         'INVOICE' => 'D5E8D4',
         'HOTEL' => 'FFF2CC',
@@ -309,12 +337,12 @@ private function addItemsToSpreadsheet($spreadsheet, $items, $tourRef, $invoiceN
     ];
     
     if (isset($colors[$item['type']])) {
-        $sheet->getStyle("A{$row}:N{$row}")->getFill()  // ✅ Changed M to N
+        $sheet->getStyle("A{$row}:N{$row}")->getFill()
             ->setFillType(Fill::FILL_SOLID)
             ->getStartColor()->setRGB($colors[$item['type']]);
     }
     
-    $sheet->getStyle("A{$row}:N{$row}")->applyFromArray([  // ✅ Changed M to N
+    $sheet->getStyle("A{$row}:N{$row}")->applyFromArray([
         'borders' => ['allBorders' => ['borderStyle' => Border::BORDER_THIN]]
     ]);
     
@@ -341,6 +369,8 @@ private function autoSizeColumns($sheet)
 private function addProfitLossRow($spreadsheet, $startRow, $endRow, $tourRef, $invoiceNumber, $agentName, $exchangeRate, $profitLossFromEmail = null)
 {
     $sheet = $spreadsheet->getActiveSheet();
+      $countryCode = $this->getCountryCodeFromTourRef($tourRef) ?? 'VN';
+    $currencySymbol = $this->getCurrencySymbol($countryCode);
     
     if ($profitLossFromEmail !== null && $profitLossFromEmail != 0) {
         $profitLoss = $profitLossFromEmail;
@@ -388,9 +418,9 @@ private function addProfitLossRow($spreadsheet, $startRow, $endRow, $tourRef, $i
     
     $localAmount = abs($profitLoss) * $exchangeRate;
     if ($profitLoss >= 0) {
-        $sheet->setCellValue("M{$pnlRow}", round($localAmount, 2));
+        $sheet->setCellValue("M{$pnlRow}", $currencySymbol . ' ' . round($localAmount, 2));
     } else {
-        $sheet->setCellValue("M{$pnlRow}", '(' . number_format($localAmount, 2) . ')');
+        $sheet->setCellValue("M{$pnlRow}", $currencySymbol . ' (' . number_format($localAmount, 2) . ')');
     }
     
     $sheet->getStyle("A{$pnlRow}:N{$pnlRow}")->applyFromArray([  // ✅ Changed M to N
@@ -417,7 +447,30 @@ private function addProfitLossRow($spreadsheet, $startRow, $endRow, $tourRef, $i
     
     return $pnlRow;
 }
-
+/**
+ * Extract country code from tour reference
+ */
+private function getCountryCodeFromTourRef($tourRef)
+{
+    if (empty($tourRef)) return null;
+    
+    $countryMap = [
+        'LK' => ['LK', 'SL'],
+        'VN' => ['VN', 'VT'],
+        'SG' => ['SG'],
+        'MY' => ['MY'],
+    ];
+    
+    foreach ($countryMap as $code => $patterns) {
+        foreach ($patterns as $pattern) {
+            if (stripos($tourRef, $pattern) !== false) {
+                return $code;
+            }
+        }
+    }
+    
+    return null;
+}
     private function getExcelFilePath($countryCode)
     {
         $files = [
@@ -459,7 +512,7 @@ private function loadOrCreateSpreadsheet($path, $countryCode)
         'J1' => 'Description',
         'K1' => 'Amount (USD)',
         'L1' => 'Exchange Rate',
-        'M1' => 'Amount (Local)',
+        'M1' => 'Amount ({currency})',
         'N1' => 'Remarks'
     ];
     
@@ -531,7 +584,7 @@ private function loadOrCreateSpreadsheet($path, $countryCode)
     try {
         $items = $record->items;
         $exchangeRate = $this->exchangeRates[$record->country_code ?? 'VN'] ?? 25500;
-        
+        $currencySymbol = $this->getCurrencySymbol($record->country_code ?? 'VN');
         if ($items->isEmpty()) {
             return '<div class="alert alert-warning">No items found for this record.</div>';
         }
@@ -540,7 +593,7 @@ private function loadOrCreateSpreadsheet($path, $countryCode)
         $html .= '<thead class="table-dark"><tr>';
         
         $headers = ['S.No', 'Tour Number', 'Invoice Number', 'Client Name', 'Type', 'Start Date', 'End Date', 
-                   'Credit Type', 'Agent Name', 'Description', 'Amount (USD)', 'Exchange Rate', 'Amount (Local)', 'Remarks'];
+                   'Credit Type', 'Agent Name', 'Description', 'Amount (USD)', 'Exchange Rate',  'Amount (' . $currencySymbol . ')', 'Remarks'];
         
         foreach ($headers as $header) {
             $html .= '<th>' . htmlspecialchars($header) . '</th>';
@@ -614,5 +667,27 @@ private function loadOrCreateSpreadsheet($path, $countryCode)
         Log::error('Record preview error: ' . $e->getMessage());
         return '<div class="alert alert-danger">Error loading record: ' . $e->getMessage() . '</div>';
     }
+}
+
+/**
+ * Get currency symbol for country code
+ */
+private function getCurrencySymbol($countryCode)
+{
+    return $this->currencySymbols[$countryCode] ?? 'USD';
+}
+
+/**
+ * Format amount with local currency
+ */
+private function formatLocalCurrency($amount, $countryCode)
+{
+    $symbol = $this->getCurrencySymbol($countryCode);
+    $formattedAmount = number_format($amount, 2);
+    
+    if ($amount < 0) {
+        return $symbol . ' (' . number_format(abs($amount), 2) . ')';
+    }
+    return $symbol . ' ' . $formattedAmount;
 }
 }
