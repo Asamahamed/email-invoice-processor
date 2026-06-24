@@ -39,7 +39,11 @@ class PnlRecord extends Model
         'tour_ref',
         'agent_name',
         'credit_type',
-        'classification_reason'
+        'classification_reason',
+          'profit_loss',
+              'total_pax',
+    'total_nights',
+
     ];
 
     protected $casts = [

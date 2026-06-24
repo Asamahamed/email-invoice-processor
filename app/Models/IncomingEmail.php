@@ -44,7 +44,9 @@ class IncomingEmail extends Model
         'has_attachments',
         'is_tour_confirmation',
         'email_metadata',
-        'error_message'
+        'error_message',
+         'agent_id',
+    'sales_person',
     ];
 
     protected $casts = [

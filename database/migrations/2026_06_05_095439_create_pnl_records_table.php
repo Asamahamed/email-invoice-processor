@@ -29,7 +29,7 @@ return new class extends Migration
             
             // Booking reference
             $table->string('tour_ref')->nullable();
-            $table->string('agent_name')->nullable();
+            $table->string('agent_name')->nullable()->default(null);
             
             $table->enum('read_status', ['unread', 'read'])->default('unread');
             $table->enum('processing_status', ['pending', 'processed', 'failed'])->default('pending');
